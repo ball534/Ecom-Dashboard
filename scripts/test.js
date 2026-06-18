@@ -21,11 +21,12 @@ const test = (name, fn) => tests.push({ name, fn });
 
 // ---- Raw Shopify-shaped order nodes (Singapore time) ----
 // `amount` is the gross sales (it goes on the first line item, tax rate 0, so it
-// passes through unchanged). gateways drives voucher; custId + numOrders drive
+// passes through unchanged). `discounts` is attached as a discountAllocation on the
+// first line item (tax rate 0 => no tax stripping) — matching how Shopify's Analytics
+// "Discounts" is reconstructed. gateways drives voucher; custId + numOrders drive
 // new-vs-returning (lifetime count == in-window count => first order is here).
 const node = (createdAt, amount, discounts, qtys, gateways, numOrders, custId) => ({
   createdAt,
-  currentTotalDiscountsSet: { shopMoney: { amount: String(discounts) } },
   paymentGatewayNames: gateways,
   lineItems: {
     edges: qtys.map((q, i) => ({
@@ -33,6 +34,10 @@ const node = (createdAt, amount, discounts, qtys, gateways, numOrders, custId) =
         quantity: q,
         originalTotalSet: { shopMoney: { amount: String(i === 0 ? amount : 0) } },
         taxLines: [],
+        discountAllocations:
+          i === 0 && discounts
+            ? [{ allocatedAmountSet: { shopMoney: { amount: String(discounts) } } }]
+            : [],
       },
     })),
   },
@@ -103,14 +108,39 @@ test("normalizeOrder reconstructs tax-excluded Gross Sales from tax-inclusive li
   assert.equal(Math.round(n.amount * 100) / 100, 150); // 100 + 50
 });
 
-test("normalizeOrder prefers CURRENT discount over original", () => {
+test("normalizeOrder sums per-line discount allocations and strips embedded tax", () => {
+  // Two lines, tax-inclusive at 9% GST. discountAllocations are tax-inclusive, so the
+  // reconstructed (Shopify Analytics) discount strips the embedded tax per line.
   const n = normalizeOrder({
-    createdAt: "2026-01-01T03:00:00Z",
-    currentTotalPriceSet: { shopMoney: { amount: "90" } },
-    totalDiscountsSet: { shopMoney: { amount: "20" } },
-    currentTotalDiscountsSet: { shopMoney: { amount: "12" } }, // 8 of discount refunded
+    createdAt: "2026-01-10T03:00:00Z",
+    taxesIncluded: true,
+    lineItems: {
+      edges: [
+        {
+          node: {
+            quantity: 1,
+            originalTotalSet: { shopMoney: { amount: "109" } }, // $100 gross
+            taxLines: [{ rate: 0.09 }],
+            discountAllocations: [
+              { allocatedAmountSet: { shopMoney: { amount: "10.9" } } }, // $10 pre-tax
+            ],
+          },
+        },
+        {
+          node: {
+            quantity: 1,
+            originalTotalSet: { shopMoney: { amount: "54.5" } }, // $50 gross
+            taxLines: [{ rate: 0.09 }],
+            discountAllocations: [
+              { allocatedAmountSet: { shopMoney: { amount: "5.45" } } }, // $5 pre-tax
+            ],
+          },
+        },
+      ],
+    },
   });
-  assert.equal(n.discounts, 12);
+  assert.equal(Math.round(n.amount * 100) / 100, 150); // 100 + 50 gross (tax-excluded)
+  assert.equal(Math.round(n.discounts * 100) / 100, 15); // 10 + 5 discount (tax-excluded)
 });
 
 test("normalizeOrder flags test + cancelled orders", () => {

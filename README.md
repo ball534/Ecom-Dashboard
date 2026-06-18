@@ -8,12 +8,15 @@ will be added in later phases.
 
 ## How it works
 
-- **`public/index.html`** — the original dashboard, render code untouched. On load it
-  renders its built-in baseline numbers immediately, then calls `/api/dashboard`, overlays
-  the live Shopify numbers onto `BRANDS.SG` (overwriting only the months the API returns,
-  so baseline/historical months and future months are preserved), recomputes the
-  All-Brands/Group aggregates, and re-renders. If the API is unavailable it silently keeps
-  the baseline — the page never breaks.
+- **`public/index.html`** — the dashboard, render code untouched. **All baked-in
+  ("baseline") numbers were removed** — the data objects (`BRANDS`, `DISCOUNTS`,
+  `CHANNELMIX`, `PRODUCTS`/`PROD_*`, `CAT_REV*`, `SESSIONSRC`, `SALEMIX`, `FUNNEL`, …)
+  ship empty. On load the page is blank until it calls `/api/dashboard` and fills
+  **iORA SG** with live Shopify numbers, then recomputes aggregates and re-renders.
+  Everything not backed by the live API (the other 7 brands, prior years, Sessions,
+  Conversion, Targets, Best Sellers, Channel Mix, …) renders an honest "no data / not
+  connected" state — never a fabricated figure. If the API is unavailable the live
+  metrics show dashes (not stale numbers).
 - **`api/dashboard.js`** — Vercel serverless function. Pulls iORA SG orders from the
   Shopify Admin GraphQL API server-side (token stays secret), aggregates them into the
   dashboard's `{metric: {year: [12 months]}}` shape, and returns JSON. CDN-cached 15 min.
@@ -21,8 +24,8 @@ will be added in later phases.
 - **`lib/aggregate.js`** — pure aggregation math (order → monthly buckets, aggregates).
 - **`scripts/`** — `verify-token.js` (auth check) and `test.js` (unit tests).
 
-A small status chip in the header shows **Live · Shopify · N mo** when live data loaded,
-or **Baseline data** with the reason when it didn't.
+A small status note in the header surfaces only problems (e.g. "Live data unavailable
+(reason)"); on success the live numbers simply appear (dashes while a request is in flight).
 
 ### What is live vs. coming soon (Shopify-only phase)
 
@@ -51,13 +54,20 @@ current total so any refund on them already nets out):
 | **Gross Sales** (`rev`) | Shopify "Gross sales" = product price × qty, **before** discounts/returns/tax/shipping. Prices are tax-inclusive (SG GST), so we strip the embedded tax per line at its own rate. | ~530,253 vs **529,494** (≈0.1%) |
 | **Orders** (`ord`) | Count of non-test orders. | 7,664 vs **7,654** |
 | **Units** (`uni`) | **Gross** quantity ordered — Shopify's "Items ordered" (`quantity_ordered`). Does **not** subtract refunds or exclude cancelled. | 22,335 vs **22,334** |
-| **Avg Order Value** | (Gross Sales − discounts) ÷ orders — a **net** basis (computed in the front-end tile). | 62.50 vs **62.88** |
-| **Discounts** (`dis`) | `currentTotalDiscounts` — net of refunded discount. | — |
+| **Discounts** (`dis`) | Sum of every line's `discountAllocations` (product + allocated cart discounts), with the embedded GST stripped per line — exactly how Shopify's Analytics "Discounts" is computed (tax-EXCLUDED). | 48,088 vs **48,185** (≈0.2%) |
+| **Avg Order Value** | (Gross Sales − discounts) ÷ orders (computed in the front-end tile) — matches Shopify's AOV. | **62.91 vs 62.88** |
 | **Voucher** (`vou`) | Orders that redeemed a **gift card / store credit** (`paymentGatewayNames`). ⚠️ *Not* "orders with a discount code" — far narrower (≈70/yr). | — |
 | **New / Returning** (`cust`/`ret`) | **Distinct customers** per month. "New" = first-ever order is in-month; else "Returning". See `classifyNewReturning`. | — |
 
-Small residuals vs the admin are **live drift** (orders placed between snapshots) plus tax/discount
-approximation. Money metrics are reconstructed from the Orders API and are within ~1%, not exact.
+> **Why "Discounts" was wrong before:** the dashboard summed `currentTotalDiscounts`, which is
+> **tax-inclusive** for this SG store — ~6% too high (51,230 vs 48,185), which also pulled AOV off
+> (62.37 vs 62.88). Discounts are now reconstructed pre-tax from per-line allocations, the same
+> tax-stripping already used for Gross Sales. ShopifyQL (the Analytics page's own source) is **not**
+> exposed on the Admin API, so these figures are reconstructed from the Orders API.
+
+Remaining residuals vs the admin are **live drift** — orders placed between when the Analytics page
+was viewed and when the dashboard queried (the store takes orders all day). The reconstruction itself
+now matches Shopify's definitions; it is not an approximation beyond that drift.
 
 > Cancelled orders are **kept** (Shopify's items/sales reports count them; refunds net out via the
 > current discount/quantity). Only **test orders** are excluded.
@@ -83,9 +93,9 @@ The header has **From / To** date pickers (default: 1 Jan of the current year �
 Changing either re-queries Shopify for that window and re-renders in place. The endpoint
 accepts `GET /api/dashboard?start=YYYY-MM-DD&end=YYYY-MM-DD` and buckets by month across any
 years the range spans. Months outside the selected range render as dashes (`–`). While a
-request is in flight, the live metrics show **dashes** rather than stale baseline numbers, so
-it's always clear whether live data has loaded. (Ranges spanning prior years need
-`read_all_orders`, which the app now has; see the new/returning caveat below.)
+request is in flight, the live metrics show **dashes**, so it's always clear whether live data
+has loaded. Selecting a range that spans prior years pulls those live too (the token has
+`read_all_orders`), though new-vs-returning is only accurate for the current year — see the caveat below.
 
 ### Getting a working token (`shpat_`)
 
@@ -129,20 +139,20 @@ On Vercel, set `SHOPIFY_TOKEN`, `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_API_VERSION` un
 
 - `npm test` → all unit tests pass (aggregation math + tallies).
 - `npm run verify-token` → ✅ once a valid `shpat_` token is set (currently ❌ auth).
-- `vercel dev` → dashboard renders; with a valid token the header chip shows "Live · Shopify",
-  SG current-year numbers match the Shopify admin Orders report, non-live panels show
-  "Coming soon"; with a bad/missing token it shows "Baseline data" and still renders fully.
+- `vercel dev` → dashboard renders; with a valid token the iORA SG current-year numbers match
+  the Shopify Analytics page (within live drift) and every non-live panel/brand shows an honest
+  "no data" state; with a bad/missing token the live metrics show dashes (no fabricated numbers).
 
 ## Notes / current limitations
 
 - Orders are fetched by cursor pagination (250/page). For very large multi-year pulls,
   switch to Shopify **Bulk Operations** (the aggregation logic in `lib/aggregate.js` is
   unchanged). Line items are read 100/order — orders with >100 lines would undercount units.
-- New-vs-returning is accurate **only while `LIVE_YEAR` is the current year** (the method
-  assumes a customer's out-of-window orders are necessarily prior, which holds when there
-  are no future orders). For historical years, classification would need a first-order-date
-  map built from `read_all_orders`.
-- `LIVE_YEAR` in `api/dashboard.js` is `2026`; bump it each January (or derive from shop date).
+- New-vs-returning is accurate **only for the current year** (the method assumes a customer's
+  out-of-window orders are necessarily prior, which holds when there are no future orders). For
+  historical years, classification would need a first-order-date map built from `read_all_orders`.
+- The default window is the current calendar year to date, derived from the shop's date
+  (`Asia/Singapore`) in `api/dashboard.js` — no hardcoded year to bump.
 - Timezone: order months are bucketed in `Asia/Singapore`.
 
 ## Roadmap (next integrations)

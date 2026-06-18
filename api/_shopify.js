@@ -83,7 +83,8 @@ export async function verifyToken(cfg) {
 }
 
 // first:100 keeps the GraphQL cost under the cap now that we read per-line
-// originalTotal + taxLines (to reconstruct Shopify's tax-excluded Gross Sales).
+// originalTotal + taxLines + discountAllocations (to reconstruct Shopify's
+// tax-EXCLUDED Gross Sales and Discounts exactly as the Analytics report does).
 const ORDERS_QUERY = (includeCustomer) => `
 query Orders($cursor: String, $q: String!) {
   orders(first: 100, after: $cursor, query: $q, sortKey: CREATED_AT) {
@@ -94,11 +95,14 @@ query Orders($cursor: String, $q: String!) {
         test
         cancelledAt
         taxesIncluded
-        currentTotalDiscountsSet { shopMoney { amount } }
-        totalDiscountsSet { shopMoney { amount } }
         paymentGatewayNames
         lineItems(first: 100) {
-          edges { node { quantity originalTotalSet { shopMoney { amount } } taxLines { rate } } }
+          edges { node {
+            quantity
+            originalTotalSet { shopMoney { amount } }
+            taxLines { rate }
+            discountAllocations { allocatedAmountSet { shopMoney { amount } } }
+          } }
         }
         ${includeCustomer ? "customer { id numberOfOrders }" : ""}
       }
