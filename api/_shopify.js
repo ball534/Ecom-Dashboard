@@ -82,18 +82,24 @@ export async function verifyToken(cfg) {
   return data.shop;
 }
 
+// first:100 (not 250) keeps the GraphQL query cost under Shopify's cap now that we
+// also walk the lineItems AND refunds connections per order.
 const ORDERS_QUERY = (includeCustomer) => `
 query Orders($cursor: String, $q: String!) {
-  orders(first: 250, after: $cursor, query: $q, sortKey: CREATED_AT) {
+  orders(first: 100, after: $cursor, query: $q, sortKey: CREATED_AT) {
     pageInfo { hasNextPage endCursor }
     edges {
       node {
         createdAt
+        test
+        cancelledAt
         currentTotalPriceSet { shopMoney { amount } }
+        currentTotalDiscountsSet { shopMoney { amount } }
         totalDiscountsSet { shopMoney { amount } }
-        discountCodes
+        paymentGatewayNames
         lineItems(first: 100) { edges { node { quantity } } }
-        ${includeCustomer ? "customer { numberOfOrders }" : ""}
+        refunds { refundLineItems(first: 100) { edges { node { quantity } } } }
+        ${includeCustomer ? "customer { id numberOfOrders }" : ""}
       }
     }
   }
@@ -112,7 +118,12 @@ export async function fetchOrders(cfg, { start, end, includeCustomer = true, max
   do {
     const data = await shopifyGraphQL(cfg, query, { cursor, q });
     const conn = data.orders;
-    for (const e of conn.edges) orders.push(normalizeOrder(e.node));
+    for (const e of conn.edges) {
+      const o = normalizeOrder(e.node);
+      // Exclude test + cancelled orders from all sales metrics (Shopify Analytics does).
+      if (o.test || o.cancelled) continue;
+      orders.push(o);
+    }
     cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
     pages += 1;
   } while (cursor && pages < maxPages);

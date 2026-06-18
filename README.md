@@ -35,13 +35,28 @@ or **Baseline data** with the reason when it didn't.
 | | 2024–2025 history (needs `read_all_orders`) |
 | | The other 7 brands |
 
-## ⚠️ Token status (as of 2026-06-17)
+## ✅ Token status (as of 2026-06-18)
 
-The key in `.env` starts with **`atkn_`**. It was **tested and REJECTED (HTTP 401)** by
-Shopify on both REST and GraphQL endpoints — **it is not a valid Shopify Admin API token.**
-The store backend was auto-detected as `iora-online.myshopify.com` (a real Shopify store —
-it returned 401 rather than 404). The app is fully built and will work as soon as a valid
-token is supplied. Until then the dashboard runs on baseline data.
+The key in `.env` is a valid `shpat_` Admin API token — `npm run verify-token` authenticates
+against **iORA** (`iora-online.myshopify.com`, SGD, `Asia/Singapore`). Live data flows.
+
+### How the numbers are defined (so they tally with the Shopify admin)
+
+The aggregation reproduces Shopify's own Analytics definitions, all **net of refunds** and
+**excluding test + cancelled orders**:
+
+| Metric | Definition |
+|---|---|
+| **Revenue** (`rev`) | `currentTotalPrice` — grand total net of refunds, incl. shipping + (tax-inclusive) GST. = Shopify "total sales". |
+| **Orders** (`ord`) | Count of non-test, non-cancelled orders. |
+| **Units** (`uni`) | **Net** items sold = ordered quantity − refunded quantity. |
+| **Discounts** (`dis`) | `currentTotalDiscounts` — net of refunded discount. |
+| **Voucher** (`vou`) | Orders that redeemed a **gift card / store credit** (via `paymentGatewayNames`). ⚠️ This is *not* "orders with a discount code" — it is far narrower (≈70/yr, not ≈1,300). The old baseline's "voucher" used a different, undocumented definition; gift-card redemption is the chosen meaning going forward. |
+| **New / Returning** (`cust` / `ret`) | **Distinct customers** per month. "New" = customer's first-ever order is in that month; "Returning" = had a prior order. Derived without a full-history pull by comparing each customer's lifetime order count to their count in the live (current) year — see `classifyNewReturning` in `lib/aggregate.js`. |
+
+Validated against the dashboard's baseline (Jan–May 2026): revenue, orders, units and
+new/returning all land within ~1–6%; units match to 0.07% (January exact). Run
+`npm run preview` to print the live month-by-month numbers and eyeball them against the admin.
 
 ### Getting a working token (`shpat_`)
 
@@ -91,10 +106,15 @@ On Vercel, set `SHOPIFY_TOKEN`, `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_API_VERSION` un
 
 ## Notes / current limitations
 
-- Orders are fetched by cursor pagination (250/page). For very large multi-year pulls,
-  switch to Shopify **Bulk Operations** (the aggregation logic in `lib/aggregate.js` is
-  unchanged). Line items are read 100/order — orders with >100 lines would undercount units.
-- New-vs-returning uses `customer.numberOfOrders` (lifetime as-of-now) — a v1 approximation.
+- Orders are fetched by cursor pagination (100/page — kept under the GraphQL cost cap now
+  that each order also walks its `lineItems` and `refunds` connections). For very large
+  multi-year pulls, switch to Shopify **Bulk Operations** (the aggregation logic in
+  `lib/aggregate.js` is unchanged). Line items and refund line items are read 100/order —
+  orders with >100 of either could under/over-count units.
+- New-vs-returning is accurate **only while `LIVE_YEAR` is the current year** (the method
+  assumes a customer's out-of-window orders are necessarily prior, which holds when there
+  are no future orders). For historical years, classification would need a first-order-date
+  map built from `read_all_orders`.
 - `LIVE_YEAR` in `api/dashboard.js` is `2026`; bump it each January (or derive from shop date).
 - Timezone: order months are bucketed in `Asia/Singapore`.
 

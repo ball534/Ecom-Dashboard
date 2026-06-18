@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "vercel dev",
     "verify-token": "node scripts/verify-token.js",
+    "preview": "node scripts/preview.js",
     "test": "node scripts/test.js"
   }
 }

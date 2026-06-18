@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import {
   normalizeOrder,
   bucketOrders,
+  classifyNewReturning,
   monthIndexInTZ,
   mergeYearArray,
   computeAggregate,
@@ -19,20 +20,22 @@ const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
 // ---- Raw Shopify-shaped order nodes (Singapore time) ----
-const node = (createdAt, amount, discounts, qtys, codes, numOrders) => ({
+// gateways drives the voucher metric (gift_card/store_credit); custId + numOrders
+// drive new-vs-returning (lifetime count == in-window count => first order is here).
+const node = (createdAt, amount, discounts, qtys, gateways, numOrders, custId) => ({
   createdAt,
   currentTotalPriceSet: { shopMoney: { amount: String(amount) } },
-  totalDiscountsSet: { shopMoney: { amount: String(discounts) } },
-  discountCodes: codes,
+  currentTotalDiscountsSet: { shopMoney: { amount: String(discounts) } },
+  paymentGatewayNames: gateways,
   lineItems: { edges: qtys.map((q) => ({ node: { quantity: q } })) },
-  customer: numOrders == null ? null : { numberOfOrders: numOrders },
+  customer: numOrders == null ? null : { id: custId, numberOfOrders: numOrders },
 });
 
 const RAW = [
-  node("2026-01-15T03:00:00Z", 100, 10, [1, 1], ["NEWYEAR"], 1), // Jan, new, code
-  node("2026-01-20T09:00:00Z", 50.5, 0, [1], [], 3), // Jan, returning, no code
-  node("2026-02-10T02:00:00Z", 200, 20, [2, 2], ["LOVE"], 1), // Feb, new, code
-  node("2026-02-28T16:30:00Z", 30, 0, [1], [], null), // 00:30 Mar 1 in SGT -> March, no customer
+  node("2026-01-15T03:00:00Z", 100, 10, [1, 1], ["gift_card"], 1, "A"), // Jan, new, voucher
+  node("2026-01-20T09:00:00Z", 50.5, 0, [1], ["shopify_payments"], 3, "B"), // Jan, returning
+  node("2026-02-10T02:00:00Z", 200, 20, [2, 2], ["gift_card"], 1, "C"), // Feb, new, voucher
+  node("2026-02-28T16:30:00Z", 30, 0, [1], ["shopify_payments"], null), // 00:30 Mar 1 SGT -> March, guest
 ];
 
 test("normalizeOrder extracts scalars correctly", () => {
@@ -40,8 +43,55 @@ test("normalizeOrder extracts scalars correctly", () => {
   assert.equal(n.amount, 100);
   assert.equal(n.discounts, 10);
   assert.equal(n.units, 2);
-  assert.equal(n.usedCode, true);
+  assert.equal(n.usedVoucher, true);
   assert.equal(n.numOrders, 1);
+  assert.equal(n.customerId, "A");
+  assert.equal(n.test, false);
+  assert.equal(n.cancelled, false);
+});
+
+test("classifyNewReturning: first-ever order is new, later same-customer orders returning", () => {
+  const orders = [
+    // customer X: lifetime 2, both orders in-window -> Jan is new, Mar is returning
+    { createdAt: "2026-01-10T03:00:00Z", customerId: "X", numOrders: 2 },
+    { createdAt: "2026-03-10T03:00:00Z", customerId: "X", numOrders: 2 },
+    // customer Y: lifetime 5 but only 1 order in-window -> existed before -> returning
+    { createdAt: "2026-02-10T03:00:00Z", customerId: "Y", numOrders: 5 },
+    // guest -> null
+    { createdAt: "2026-02-11T03:00:00Z", customerId: null, numOrders: null },
+  ];
+  const c = classifyNewReturning(orders);
+  assert.equal(c[0].isNew, true); // X's first ever
+  assert.equal(c[1].isNew, false); // X again
+  assert.equal(c[2].isNew, false); // Y pre-existed
+  assert.equal(c[3].isNew, null); // guest
+});
+
+test("normalizeOrder counts NET units (ordered minus refunded)", () => {
+  const n = normalizeOrder({
+    createdAt: "2026-04-10T03:00:00Z",
+    currentTotalPriceSet: { shopMoney: { amount: "100" } },
+    lineItems: { edges: [{ node: { quantity: 3 } }, { node: { quantity: 2 } }] },
+    refunds: [{ refundLineItems: { edges: [{ node: { quantity: 2 } }] } }],
+  });
+  assert.equal(n.units, 3); // 5 ordered − 2 refunded
+});
+
+test("normalizeOrder prefers CURRENT discount over original", () => {
+  const n = normalizeOrder({
+    createdAt: "2026-01-01T03:00:00Z",
+    currentTotalPriceSet: { shopMoney: { amount: "90" } },
+    totalDiscountsSet: { shopMoney: { amount: "20" } },
+    currentTotalDiscountsSet: { shopMoney: { amount: "12" } }, // 8 of discount refunded
+  });
+  assert.equal(n.discounts, 12);
+});
+
+test("normalizeOrder flags test + cancelled orders", () => {
+  const t = normalizeOrder({ createdAt: "2026-01-01T03:00:00Z", test: true });
+  const c = normalizeOrder({ createdAt: "2026-01-01T03:00:00Z", cancelledAt: "2026-01-02T00:00:00Z" });
+  assert.equal(t.test, true);
+  assert.equal(c.cancelled, true);
 });
 
 test("monthIndexInTZ respects Asia/Singapore offset (month rollover)", () => {
