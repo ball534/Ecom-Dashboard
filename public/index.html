@@ -210,21 +210,57 @@
         margin-top: 9px;
       }
       .daterange {
+        margin-top: 10px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        align-items: flex-end;
+      }
+      .dr-inputs {
         display: inline-flex;
         align-items: center;
-        gap: 5px;
-        margin-top: 6px;
-        font-size: 11.5px;
+        gap: 6px;
+        font-size: 12px;
         color: var(--muted);
+      }
+      .dr-inputs label {
+        font-weight: 600;
+        letter-spacing: 0.02em;
       }
       .daterange input[type="date"] {
         font: inherit;
-        font-size: 11.5px;
-        color: inherit;
+        font-size: 12.5px;
+        color: var(--ink, inherit);
         background: var(--paper2);
         border: 1px solid var(--line, #ccc);
-        border-radius: 6px;
-        padding: 2px 6px;
+        border-radius: 7px;
+        padding: 4px 8px;
+        cursor: pointer;
+      }
+      .dr-presets {
+        display: inline-flex;
+        gap: 4px;
+      }
+      .dr-presets button {
+        font: inherit;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--muted);
+        background: var(--paper2);
+        border: 1px solid var(--line, #ddd);
+        border-radius: 999px;
+        padding: 3px 10px;
+        cursor: pointer;
+        transition: all 0.12s ease;
+      }
+      .dr-presets button:hover {
+        color: var(--ink, #000);
+        border-color: var(--muted);
+      }
+      .dr-presets button.on {
+        color: #fff;
+        background: var(--accent, #b5482e);
+        border-color: var(--accent, #b5482e);
       }
       .chip.up {
         color: var(--green);
@@ -719,14 +755,22 @@
           <h1>E-commerce <em>Performance</em></h1>
         </div>
         <div class="meta">
-          <span id="metaDomain">sg.iora.online</span><br />Currency
-          <b id="metaCur">SGD</b> · Source <b>Shopify</b><br />
-          <span class="daterange">
-            <label for="liveStart">From</label>
-            <input type="date" id="liveStart" />
-            <label for="liveEnd">to</label>
-            <input type="date" id="liveEnd" />
-          </span>
+          <span id="metaDomain">sg.iora.online</span> · Currency
+          <b id="metaCur">SGD</b> · Source <b>Shopify</b>
+          <div class="daterange">
+            <div class="dr-inputs">
+              <label for="liveStart">From</label>
+              <input type="date" id="liveStart" />
+              <label for="liveEnd">To</label>
+              <input type="date" id="liveEnd" />
+            </div>
+            <div class="dr-presets" id="datePresets">
+              <button type="button" data-preset="mtd">This month</button>
+              <button type="button" data-preset="30d">Last 30d</button>
+              <button type="button" data-preset="90d">Last 90d</button>
+              <button type="button" data-preset="ytd" class="on">Year to date</button>
+            </div>
+          </div>
         </div>
       </header>
       <section class="panel feature">
@@ -5028,18 +5072,14 @@
           aovB = rB != null && oB ? (rB - (dB || 0)) / oB : null,
           cvA = oA != null && sA ? (oA / sA) * 100 : null,
           cvB = oB != null && sB ? (oB / sB) * 100 : null;
-        const toDate = win(B().rev[yr]);
-        const tdLabel = full ? "Gross Sales · Full Year" : "Gross Sales · " + wlab;
-        const tdSub = "selected range";
         const T = [
-          ["Gross Sales (" + wlab + ")", mny(rA), cmp(rA, rB), rB],
-          ["Orders (" + wlab + ")", mi(oA), cmp(oA, oB), oB],
+          ["Gross Sales", mny(rA), cmp(rA, rB), rB],
+          ["Orders", mi(oA), cmp(oA, oB), oB],
           ["Avg Order Value", mny(aovA), cmp(aovA, aovB), aovB],
-          ["Units (" + wlab + ")", mi(uA), cmp(uA, uB), uB],
-          ["Sessions (" + wlab + ")", mi(sA), cmp(sA, sB), sB],
-          ["Conversion", mp(cvA), cmp(cvA, cvB), cvB],
-          ["Customers (" + wlab + ")", mi(cA), cmp(cA, cB), cB],
-          [tdLabel, mny(toDate), null, null, tdSub],
+          ["Units", mi(uA), cmp(uA, uB), uB],
+          ["Sessions", mi(sA), cmp(sA, sB), sB, "not in Shopify API"],
+          ["Conversion", mp(cvA), cmp(cvA, cvB), cvB, "not in Shopify API"],
+          ["Customers", mi(cA), cmp(cA, cB), cB],
         ];
         const host = document.getElementById("liveTiles");
         host.innerHTML = "";
@@ -11246,9 +11286,7 @@
         // Summary tiles read liveState.year — point them at the range's latest year.
         if (typeof liveState !== "undefined") liveState.year = years[years.length - 1];
         blankLive(years);
-        var pill = document.getElementById("snapPill");
-        if (pill) pill.textContent = start + " → " + end + " · loading…";
-        setLiveStatus("● Loading live data…", "");
+        setLiveStatus("", "");
         reRender();
 
         fetch("/api/dashboard?start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end))
@@ -11256,21 +11294,18 @@
           .then(function (payload) {
             if (applyLive(payload)) {
               window.__LIVE_SG = true;
-              setLiveStatus("● Live · Shopify · " + liveMonthsCount(payload.meta) + " mo (" + start + " → " + end + ")", "ok");
-              if (pill) pill.textContent = start + " → " + end + " · live";
+              setLiveStatus("", "ok");
             } else {
               restoreBaseline(years);
               var reason = payload && payload.meta ? payload.meta.reason : "unknown";
-              setLiveStatus("● Baseline data — live unavailable (" + reason + ")", "warn");
-              if (pill) pill.textContent = "baseline data";
+              setLiveStatus("Live data unavailable (" + reason + ") — showing baseline.", "warn");
             }
             markComingSoonPanels(window.__LIVE_SG === true);
             reRender();
           })
           .catch(function () {
             restoreBaseline(years);
-            setLiveStatus("● Baseline data — live unavailable (offline)", "warn");
-            if (pill) pill.textContent = "baseline data";
+            setLiveStatus("Live data unavailable (offline) — showing baseline.", "warn");
             reRender();
           });
       }
@@ -11282,23 +11317,53 @@
       (function initDateRange() {
         var startEl = document.getElementById("liveStart");
         var endEl = document.getElementById("liveEnd");
-        var now = new Date();
+        var presetWrap = document.getElementById("datePresets");
         var pad = function (x) { return String(x).padStart(2, "0"); };
-        var todayStr = now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
-        var startStr = now.getFullYear() + "-01-01";
-        if (startEl) { startEl.value = startStr; startEl.max = todayStr; }
-        if (endEl) { endEl.value = todayStr; endEl.max = todayStr; }
+        var fmt = function (d) { return d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate()); };
+        var today = new Date();
+        var todayStr = fmt(today);
 
-        function onChange() {
-          var s = startEl && startEl.value ? startEl.value : startStr;
+        // Resolve a named preset to a [start, end] pair.
+        function rangeFor(preset) {
+          var d;
+          if (preset === "mtd") return [today.getFullYear() + "-" + pad(today.getMonth() + 1) + "-01", todayStr];
+          if (preset === "30d") { d = new Date(today); d.setDate(d.getDate() - 29); return [fmt(d), todayStr]; }
+          if (preset === "90d") { d = new Date(today); d.setDate(d.getDate() - 89); return [fmt(d), todayStr]; }
+          return [today.getFullYear() + "-01-01", todayStr]; // ytd
+        }
+        function setActivePreset(preset) {
+          if (!presetWrap) return;
+          presetWrap.querySelectorAll("button").forEach(function (b) {
+            b.classList.toggle("on", b.dataset.preset === preset);
+          });
+        }
+        function apply(start, end, preset) {
+          if (startEl) { startEl.value = start; startEl.max = todayStr; }
+          if (endEl) { endEl.value = end; endEl.max = todayStr; }
+          setActivePreset(preset);
+          loadLive(start, end);
+        }
+        // Editing a date by hand clears the active preset highlight.
+        function onManual() {
+          var s = startEl && startEl.value ? startEl.value : today.getFullYear() + "-01-01";
           var e = endEl && endEl.value ? endEl.value : todayStr;
-          if (s > e) { var t = s; s = e; e = t; }
+          if (s > e) { var t = s; s = e; e = t; if (startEl) startEl.value = s; if (endEl) endEl.value = e; }
+          setActivePreset(null);
           loadLive(s, e);
         }
-        if (startEl) startEl.addEventListener("change", onChange);
-        if (endEl) endEl.addEventListener("change", onChange);
+        if (startEl) startEl.addEventListener("change", onManual);
+        if (endEl) endEl.addEventListener("change", onManual);
+        if (presetWrap) {
+          presetWrap.querySelectorAll("button").forEach(function (b) {
+            b.addEventListener("click", function () {
+              var r = rangeFor(b.dataset.preset);
+              apply(r[0], r[1], b.dataset.preset);
+            });
+          });
+        }
 
-        loadLive(startStr, todayStr);
+        var def = rangeFor("ytd"); // default view: year to date
+        apply(def[0], def[1], "ytd");
       })();
     </script>
   </body>
