@@ -20,14 +20,22 @@ const tests = [];
 const test = (name, fn) => tests.push({ name, fn });
 
 // ---- Raw Shopify-shaped order nodes (Singapore time) ----
-// gateways drives the voucher metric (gift_card/store_credit); custId + numOrders
-// drive new-vs-returning (lifetime count == in-window count => first order is here).
+// `amount` is the gross sales (it goes on the first line item, tax rate 0, so it
+// passes through unchanged). gateways drives voucher; custId + numOrders drive
+// new-vs-returning (lifetime count == in-window count => first order is here).
 const node = (createdAt, amount, discounts, qtys, gateways, numOrders, custId) => ({
   createdAt,
-  currentTotalPriceSet: { shopMoney: { amount: String(amount) } },
   currentTotalDiscountsSet: { shopMoney: { amount: String(discounts) } },
   paymentGatewayNames: gateways,
-  lineItems: { edges: qtys.map((q) => ({ node: { quantity: q } })) },
+  lineItems: {
+    edges: qtys.map((q, i) => ({
+      node: {
+        quantity: q,
+        originalTotalSet: { shopMoney: { amount: String(i === 0 ? amount : 0) } },
+        taxLines: [],
+      },
+    })),
+  },
   customer: numOrders == null ? null : { id: custId, numberOfOrders: numOrders },
 });
 
@@ -70,10 +78,29 @@ test("classifyNewReturning: first-ever order is new, later same-customer orders 
 test("normalizeOrder counts GROSS units ordered (NOT net of refunds)", () => {
   const n = normalizeOrder({
     createdAt: "2026-04-10T03:00:00Z",
-    currentTotalPriceSet: { shopMoney: { amount: "100" } },
-    lineItems: { edges: [{ node: { quantity: 3 } }, { node: { quantity: 2 } }] },
+    lineItems: {
+      edges: [
+        { node: { quantity: 3, originalTotalSet: { shopMoney: { amount: "0" } }, taxLines: [] } },
+        { node: { quantity: 2, originalTotalSet: { shopMoney: { amount: "0" } }, taxLines: [] } },
+      ],
+    },
   });
   assert.equal(n.units, 5); // matches Shopify's quantity_ordered (gross)
+});
+
+test("normalizeOrder reconstructs tax-excluded Gross Sales from tax-inclusive lines", () => {
+  const n = normalizeOrder({
+    createdAt: "2026-01-10T03:00:00Z",
+    taxesIncluded: true,
+    lineItems: {
+      edges: [
+        // $109 incl. 9% GST -> $100 gross; $54.5 incl. 9% -> $50
+        { node: { quantity: 1, originalTotalSet: { shopMoney: { amount: "109" } }, taxLines: [{ rate: 0.09 }] } },
+        { node: { quantity: 1, originalTotalSet: { shopMoney: { amount: "54.5" } }, taxLines: [{ rate: 0.09 }] } },
+      ],
+    },
+  });
+  assert.equal(Math.round(n.amount * 100) / 100, 150); // 100 + 50
 });
 
 test("normalizeOrder prefers CURRENT discount over original", () => {

@@ -46,17 +46,34 @@ The aggregation matches Shopify's own Analytics reports. Only **test orders** ar
 (cancelled orders are kept — Shopify's items/sales reports count them, and revenue uses the
 current total so any refund on them already nets out):
 
-| Metric | Definition |
-|---|---|
-| **Units** (`uni`) | **Gross** quantity ordered — matches Shopify's "Items ordered over time" report (`quantity_ordered`). Does **not** subtract refunds or exclude cancelled orders. Verified: Jan 1–Jun 18 2026 = **22,334**, exactly Shopify's figure. |
-| **Revenue** (`rev`) | `currentTotalPrice` — grand total **net of refunds**, incl. shipping + (tax-inclusive) GST. = Shopify "total sales". |
-| **Orders** (`ord`) | Count of non-test orders. |
-| **Discounts** (`dis`) | `currentTotalDiscounts` — net of refunded discount. |
-| **Voucher** (`vou`) | Orders that redeemed a **gift card / store credit** (via `paymentGatewayNames`). ⚠️ This is *not* "orders with a discount code" — it is far narrower (≈70/yr, not ≈1,300). The old baseline's "voucher" used a different, undocumented definition; gift-card redemption is the chosen meaning going forward. |
-| **New / Returning** (`cust` / `ret`) | **Distinct customers** per month. "New" = customer's first-ever order is in that month; "Returning" = had a prior order. Derived without a full-history pull by comparing each customer's lifetime order count to their count in the live (current) year — see `classifyNewReturning` in `lib/aggregate.js`. |
+| Metric | Definition | Verified (Jan 1–Jun 18 2026) |
+|---|---|---|
+| **Gross Sales** (`rev`) | Shopify "Gross sales" = product price × qty, **before** discounts/returns/tax/shipping. Prices are tax-inclusive (SG GST), so we strip the embedded tax per line at its own rate. | ~530,253 vs **529,494** (≈0.1%) |
+| **Orders** (`ord`) | Count of non-test orders. | 7,664 vs **7,654** |
+| **Units** (`uni`) | **Gross** quantity ordered — Shopify's "Items ordered" (`quantity_ordered`). Does **not** subtract refunds or exclude cancelled. | 22,335 vs **22,334** |
+| **Avg Order Value** | (Gross Sales − discounts) ÷ orders — a **net** basis (computed in the front-end tile). | 62.50 vs **62.88** |
+| **Discounts** (`dis`) | `currentTotalDiscounts` — net of refunded discount. | — |
+| **Voucher** (`vou`) | Orders that redeemed a **gift card / store credit** (`paymentGatewayNames`). ⚠️ *Not* "orders with a discount code" — far narrower (≈70/yr). | — |
+| **New / Returning** (`cust`/`ret`) | **Distinct customers** per month. "New" = first-ever order is in-month; else "Returning". See `classifyNewReturning`. | — |
 
-> Note: "Items ordered" (gross, `uni`) and "net items sold" (after returns) are *different*
-> Shopify metrics. This dashboard uses **gross**, to match the report screen the team reads.
+Small residuals vs the admin are **live drift** (orders placed between snapshots) plus tax/discount
+approximation. Money metrics are reconstructed from the Orders API and are within ~1%, not exact.
+
+> Cancelled orders are **kept** (Shopify's items/sales reports count them; refunds net out via the
+> current discount/quantity). Only **test orders** are excluded.
+
+### What the Shopify Admin API can and cannot provide
+
+These come straight from the Orders/Customers API: **Gross Sales, Orders, Units, Discounts, Voucher
+(gift-card), New/Returning customers, AOV** (derived). Also readable but not yet surfaced: products,
+inventory, returns, gift cards, markets, channels, marketing events, abandoned checkouts, metaobjects.
+
+**Not available via the Admin API — at all, regardless of scope:** **Sessions** and **Conversion
+rate**. These are web-analytics metrics that live only in the Shopify *Analytics* page (powered by
+ShopifyQL, which Shopify removed from the Admin API — tested & rejected on API versions 2024-04
+through 2025-04). `read_analytics`/`read_reports` are in the token's scopes but **add no API fields**
+for them. The dashboard therefore shows Sessions & Conversion as **dashes (n/a)**. To populate them
+you'd need a separate source (the Analytics UI/export, a GA4 integration, or manual entry).
 
 Run `npm run preview` to print the live month-by-month numbers and eyeball them against the admin.
 

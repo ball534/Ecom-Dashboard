@@ -719,11 +719,8 @@
           <h1>E-commerce <em>Performance</em></h1>
         </div>
         <div class="meta">
-          <span id="metaDomain">sg.iora.online</span> · Review <b>2024 – 2026</b
-          ><br />Currency <b id="metaCur">SGD</b> · Source
-          <b>Shopify Analytics</b><br /><span class="pill" id="snapPill"
-            >2026 data · Jan–Jun (Jun MTD)</span
-          ><br />
+          <span id="metaDomain">sg.iora.online</span><br />Currency
+          <b id="metaCur">SGD</b> · Source <b>Shopify</b><br />
           <span class="daterange">
             <label for="liveStart">From</label>
             <input type="date" id="liveStart" />
@@ -735,19 +732,7 @@
       <section class="panel feature">
         <div class="panel-head">
           <div>
-            <h2 id="liveTitle">2026 Live Summary</h2>
-            <div class="desc">
-              Pick a year to summarise. A partial year (2026) compares complete
-              months year-to-date vs the prior year; a full year compares
-              full-year YoY.
-            </div>
-          </div>
-          <div class="controls">
-            <div class="seg" id="liveYear">
-              <button data-y="2024">2024</button
-              ><button data-y="2025">2025</button
-              ><button data-y="2026" class="on">2026</button>
-            </div>
+            <h2 id="liveTitle">Live Summary</h2>
           </div>
         </div>
         <div class="tiles" id="liveTiles"></div>
@@ -5034,25 +5019,20 @@
           sA = win(B().ses[yr]),
           sB = win(B().ses[prev]),
           cA = add(win(B().cust[yr]), win(B().ret[yr])),
-          cB = add(win(B().cust[prev]), win(B().ret[prev]));
-        const aovA = rA != null && oA ? rA / oA : null,
-          aovB = rB != null && oB ? rB / oB : null,
+          cB = add(win(B().cust[prev]), win(B().ret[prev])),
+          dA = win(B().dis[yr]),
+          dB = win(B().dis[prev]);
+        // AOV uses a NET basis (gross sales − discounts) ÷ orders — matches Shopify's
+        // "average order value", which is lower than gross ÷ orders.
+        const aovA = rA != null && oA ? (rA - (dA || 0)) / oA : null,
+          aovB = rB != null && oB ? (rB - (dB || 0)) / oB : null,
           cvA = oA != null && sA ? (oA / sA) * 100 : null,
           cvB = oB != null && sB ? (oB / sB) * 100 : null;
-        const isCur = yr === 2026 && B().junTD;
-        const toDate = isCur ? (rA || 0) + (B().junTD || 0) : win(B().rev[yr]);
-        const tdLabel = isCur
-          ? "Total Sales · 1 Jan – to date"
-          : full
-            ? "Total Sales · Full Year"
-            : "Total Sales · " + wlab;
-        const tdSub = isCur
-          ? "live · incl. partial June — matches Shopify"
-          : full
-            ? "full-year total"
-            : "complete months";
+        const toDate = win(B().rev[yr]);
+        const tdLabel = full ? "Gross Sales · Full Year" : "Gross Sales · " + wlab;
+        const tdSub = "selected range";
         const T = [
-          ["Revenue (" + wlab + ")", mny(rA), cmp(rA, rB), rB],
+          ["Gross Sales (" + wlab + ")", mny(rA), cmp(rA, rB), rB],
           ["Orders (" + wlab + ")", mi(oA), cmp(oA, oB), oB],
           ["Avg Order Value", mny(aovA), cmp(aovA, aovB), aovB],
           ["Units (" + wlab + ")", mi(uA), cmp(uA, uB), uB],
@@ -5075,50 +5055,11 @@
           el.innerHTML = `<div class="tl">${t[0]}</div><div class="tv">${t[1]}</div>${chip}`;
           host.appendChild(el);
         });
-        document.getElementById("liveTitle").textContent =
-          B().name + " — " + yr + (full ? " Summary" : " Live Summary");
-        document
-          .querySelectorAll("#liveYear button")
-          .forEach((b) => b.classList.toggle("on", b.dataset.y == String(yr)));
-        let foot;
-        if (full)
-          foot = hasPrev
-            ? "Full-year " +
-              yr +
-              " vs " +
-              prev +
-              " (like-for-like YoY). Currency " +
-              CUR.code +
-              "."
-            : B().launch24 && prev <= 2024
-              ? "Full-year " +
-                yr +
-                ". " +
-                prev +
-                " was a launch period, so YoY is omitted. Currency " +
-                CUR.code +
-                "."
-              : "Full-year " +
-                yr +
-                ". No " +
-                prev +
-                " data for YoY. Currency " +
-                CUR.code +
-                ".";
-        else
-          foot =
-            "‘" +
-            wlab +
-            "’ tiles compare complete months vs " +
-            prev +
-            " (like-for-like YoY). " +
-            (isCur
-              ? "‘Total to date’ is the live 1 Jan→today figure and matches Shopify Total sales. "
-              : "") +
-            "Currency " +
-            CUR.code +
-            ".";
-        document.getElementById("liveFoot").textContent = foot;
+        document.getElementById("liveTitle").textContent = B().name + " — Live Summary";
+        document.getElementById("liveFoot").textContent =
+          "Live Shopify data for the selected date range. Gross Sales = product price × qty " +
+          "(before discounts & tax); AOV = (gross − discounts) ÷ orders. Sessions & Conversion " +
+          "are not available via the Shopify API. Currency " + CUR.code + ".";
       }
       function render() {
         const m = METRICS[state.metric];
@@ -11180,8 +11121,10 @@
         });
       }
 
-      // Metrics the live Shopify API actually returns. Sessions/targets stay baseline.
-      var LIVE_METRICS = ["rev", "ord", "uni", "dis", "vou", "cust", "ret"];
+      // Metrics tied to the live window. The API returns all of these EXCEPT `ses`
+      // (sessions/conversion aren't exposed by the Shopify API) — `ses` is included so
+      // it shows dashes (n/a) over the live range rather than stale baseline numbers.
+      var LIVE_METRICS = ["rev", "ord", "uni", "dis", "vou", "cust", "ret", "ses"];
       var SG_BASELINE = null; // one-time stash of the original baseline for those metrics
 
       function snapshotBaseline() {
@@ -11243,6 +11186,8 @@
         return Object.keys(ml).reduce(function (t, y) { return t + (ml[y] || []).length; }, 0);
       }
 
+      // Only surface problems (baseline/offline). Successful/loading states stay quiet —
+      // the dashes already indicate loading, and we don't want a "Live · Shopify" chip.
       function setLiveStatus(msg, cls) {
         var el = document.getElementById("liveStatus");
         if (!el) {
@@ -11251,8 +11196,14 @@
           el.id = "liveStatus";
           meta.appendChild(el);
         }
-        el.textContent = msg;
-        el.className = cls || "";
+        if (cls === "warn") {
+          el.textContent = msg;
+          el.className = "warn";
+          el.style.display = "";
+        } else {
+          el.textContent = "";
+          el.style.display = "none";
+        }
       }
 
       // Brands without a live integration yet -> "soon" hint on their buttons.
@@ -11292,6 +11243,8 @@
         snapshotBaseline();
         var years = [];
         for (var y = +start.slice(0, 4); y <= +end.slice(0, 4); y++) years.push(y);
+        // Summary tiles read liveState.year — point them at the range's latest year.
+        if (typeof liveState !== "undefined") liveState.year = years[years.length - 1];
         blankLive(years);
         var pill = document.getElementById("snapPill");
         if (pill) pill.textContent = start + " → " + end + " · loading…";
