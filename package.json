@@ -1,0 +1,15 @@
+{
+  "name": "iora-live-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "iORA e-commerce performance dashboard — live data via Shopify (Vercel serverless).",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vercel dev",
+    "verify-token": "node scripts/verify-token.js",
+    "test": "node scripts/test.js"
+  }
+}
