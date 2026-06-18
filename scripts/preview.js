@@ -24,7 +24,7 @@ const f = (n) => (n == null ? "" : Number(n).toLocaleString("en-SG", { maximumFr
 const pad = (s, w) => String(s).padStart(w);
 
 console.log(`\niORA SG — live Shopify aggregation for ${YEAR}`);
-console.log(`(${orders.length} orders over ${pages} pages${truncated ? ", TRUNCATED" : ""}; test + cancelled excluded)\n`);
+console.log(`(${orders.length} orders over ${pages} pages${truncated ? ", TRUNCATED" : ""}; test orders excluded)\n`);
 const cols = ["Mo", "Revenue", "Orders", "Units", "Discounts", "Voucher", "New", "Return"];
 console.log(cols.map((c, i) => pad(c, i === 0 ? 4 : 12)).join(""));
 const live = monthsWithData(m.ord[YEAR]);

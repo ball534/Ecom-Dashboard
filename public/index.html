@@ -209,6 +209,23 @@
         padding: 2px 8px;
         margin-top: 9px;
       }
+      .daterange {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        margin-top: 6px;
+        font-size: 11.5px;
+        color: var(--muted);
+      }
+      .daterange input[type="date"] {
+        font: inherit;
+        font-size: 11.5px;
+        color: inherit;
+        background: var(--paper2);
+        border: 1px solid var(--line, #ccc);
+        border-radius: 6px;
+        padding: 2px 6px;
+      }
       .chip.up {
         color: var(--green);
         background: var(--green-bg);
@@ -706,7 +723,13 @@
           ><br />Currency <b id="metaCur">SGD</b> · Source
           <b>Shopify Analytics</b><br /><span class="pill" id="snapPill"
             >2026 data · Jan–Jun (Jun MTD)</span
-          >
+          ><br />
+          <span class="daterange">
+            <label for="liveStart">From</label>
+            <input type="date" id="liveStart" />
+            <label for="liveEnd">to</label>
+            <input type="date" id="liveEnd" />
+          </span>
         </div>
       </header>
       <section class="panel feature">
@@ -11157,19 +11180,67 @@
         });
       }
 
-      function applyLiveOverrides(payload) {
+      // Metrics the live Shopify API actually returns. Sessions/targets stay baseline.
+      var LIVE_METRICS = ["rev", "ord", "uni", "dis", "vou", "cust", "ret"];
+      var SG_BASELINE = null; // one-time stash of the original baseline for those metrics
+
+      function snapshotBaseline() {
+        if (SG_BASELINE) return;
+        SG_BASELINE = {};
+        LIVE_METRICS.forEach(function (m) {
+          SG_BASELINE[m] = {};
+          Object.keys(BRANDS.SG[m] || {}).forEach(function (y) {
+            SG_BASELINE[m][y] = (BRANDS.SG[m][y] || []).slice();
+          });
+        });
+      }
+
+      // Show "data not loaded yet" dashes for the years we're about to (re)load.
+      function blankLive(years) {
+        LIVE_METRICS.forEach(function (m) {
+          BRANDS.SG[m] = BRANDS.SG[m] || {};
+          years.forEach(function (y) { BRANDS.SG[m][y] = Array(12).fill(null); });
+        });
+        rebuildAggs();
+      }
+
+      // Put the original baseline back for the given years (used when live fails).
+      function restoreBaseline(years) {
+        if (!SG_BASELINE) return;
+        LIVE_METRICS.forEach(function (m) {
+          if (!SG_BASELINE[m]) return;
+          years.forEach(function (y) {
+            if (SG_BASELINE[m][y]) BRANDS.SG[m][y] = SG_BASELINE[m][y].slice();
+            else if (BRANDS.SG[m]) delete BRANDS.SG[m][y];
+          });
+        });
+        rebuildAggs();
+      }
+
+      // REPLACE SG's covered years with the live payload, so months outside the
+      // selected range render as dashes rather than stale baseline numbers.
+      function applyLive(payload) {
         if (!payload || !payload.SG || !payload.meta || !payload.meta.live) return false;
         var live = payload.SG;
-        Object.keys(live).forEach(function (metric) {
-          if (!BRANDS.SG[metric]) BRANDS.SG[metric] = {};
-          Object.keys(live[metric]).forEach(function (yr) {
-            var base = (BRANDS.SG[metric][yr] || Array(12).fill(null)).slice();
-            (live[metric][yr] || []).forEach(function (v, i) { if (v != null) base[i] = v; });
-            BRANDS.SG[metric][yr] = base;
+        LIVE_METRICS.forEach(function (m) {
+          if (!live[m]) return;
+          BRANDS.SG[m] = BRANDS.SG[m] || {};
+          Object.keys(live[m]).forEach(function (yr) {
+            var arr = Array(12).fill(null);
+            (live[m][yr] || []).forEach(function (v, i) { if (v != null) arr[i] = v; });
+            BRANDS.SG[m][yr] = arr;
           });
         });
         rebuildAggs();
         return true;
+      }
+
+      // monthsLive is keyed by year now; total the months that have data.
+      function liveMonthsCount(meta) {
+        var ml = meta && meta.monthsLive;
+        if (!ml) return 0;
+        if (Array.isArray(ml)) return ml.length;
+        return Object.keys(ml).reduce(function (t, y) { return t + (ml[y] || []).length; }, 0);
       }
 
       function setLiveStatus(msg, cls) {
@@ -11210,27 +11281,72 @@
         });
       }
 
-      // Render baseline first, then progressively enhance with live data.
+      function reRender() {
+        if (typeof state !== "undefined") setBrand(state.brand);
+      }
+
+      // Fetch live Shopify data for [start,end]. While in flight the covered years
+      // show dashes (not stale baseline); on success they're replaced with live data;
+      // on failure the baseline is restored so the page is never empty.
+      function loadLive(start, end) {
+        snapshotBaseline();
+        var years = [];
+        for (var y = +start.slice(0, 4); y <= +end.slice(0, 4); y++) years.push(y);
+        blankLive(years);
+        var pill = document.getElementById("snapPill");
+        if (pill) pill.textContent = start + " → " + end + " · loading…";
+        setLiveStatus("● Loading live data…", "");
+        reRender();
+
+        fetch("/api/dashboard?start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end))
+          .then(function (r) { return r.json(); })
+          .then(function (payload) {
+            if (applyLive(payload)) {
+              window.__LIVE_SG = true;
+              setLiveStatus("● Live · Shopify · " + liveMonthsCount(payload.meta) + " mo (" + start + " → " + end + ")", "ok");
+              if (pill) pill.textContent = start + " → " + end + " · live";
+            } else {
+              restoreBaseline(years);
+              var reason = payload && payload.meta ? payload.meta.reason : "unknown";
+              setLiveStatus("● Baseline data — live unavailable (" + reason + ")", "warn");
+              if (pill) pill.textContent = "baseline data";
+            }
+            markComingSoonPanels(window.__LIVE_SG === true);
+            reRender();
+          })
+          .catch(function () {
+            restoreBaseline(years);
+            setLiveStatus("● Baseline data — live unavailable (offline)", "warn");
+            if (pill) pill.textContent = "baseline data";
+            reRender();
+          });
+      }
+
+      // Render baseline shell first, then load live data for the default window.
       markComingSoonBrands();
       setBrand("SG");
-      setLiveStatus("● Loading live data…", "");
-      fetch("/api/dashboard")
-        .then(function (r) { return r.json(); })
-        .then(function (payload) {
-          if (applyLiveOverrides(payload)) {
-            window.__LIVE_SG = true;
-            var n = (payload.meta.monthsLive || []).length;
-            setLiveStatus("● Live · Shopify · " + n + " mo (" + (payload.meta.year || "") + ")", "ok");
-            if (typeof state !== "undefined" && state.brand === "SG") setBrand("SG");
-          } else {
-            var reason = payload && payload.meta ? payload.meta.reason : "unknown";
-            setLiveStatus("● Baseline data — live unavailable (" + reason + ")", "warn");
-          }
-          markComingSoonPanels(window.__LIVE_SG === true);
-        })
-        .catch(function () {
-          setLiveStatus("● Baseline data — live unavailable (offline)", "warn");
-        });
+
+      (function initDateRange() {
+        var startEl = document.getElementById("liveStart");
+        var endEl = document.getElementById("liveEnd");
+        var now = new Date();
+        var pad = function (x) { return String(x).padStart(2, "0"); };
+        var todayStr = now.getFullYear() + "-" + pad(now.getMonth() + 1) + "-" + pad(now.getDate());
+        var startStr = now.getFullYear() + "-01-01";
+        if (startEl) { startEl.value = startStr; startEl.max = todayStr; }
+        if (endEl) { endEl.value = todayStr; endEl.max = todayStr; }
+
+        function onChange() {
+          var s = startEl && startEl.value ? startEl.value : startStr;
+          var e = endEl && endEl.value ? endEl.value : todayStr;
+          if (s > e) { var t = s; s = e; e = t; }
+          loadLive(s, e);
+        }
+        if (startEl) startEl.addEventListener("change", onChange);
+        if (endEl) endEl.addEventListener("change", onChange);
+
+        loadLive(startStr, todayStr);
+      })();
     </script>
   </body>
 </html>

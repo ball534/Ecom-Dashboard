@@ -67,14 +67,13 @@ test("classifyNewReturning: first-ever order is new, later same-customer orders 
   assert.equal(c[3].isNew, null); // guest
 });
 
-test("normalizeOrder counts NET units (ordered minus refunded)", () => {
+test("normalizeOrder counts GROSS units ordered (NOT net of refunds)", () => {
   const n = normalizeOrder({
     createdAt: "2026-04-10T03:00:00Z",
     currentTotalPriceSet: { shopMoney: { amount: "100" } },
     lineItems: { edges: [{ node: { quantity: 3 } }, { node: { quantity: 2 } }] },
-    refunds: [{ refundLineItems: { edges: [{ node: { quantity: 2 } }] } }],
   });
-  assert.equal(n.units, 3); // 5 ordered − 2 refunded
+  assert.equal(n.units, 5); // matches Shopify's quantity_ordered (gross)
 });
 
 test("normalizeOrder prefers CURRENT discount over original", () => {
