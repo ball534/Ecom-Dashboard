@@ -6,11 +6,20 @@
 // Query params (optional):
 //   ?start=YYYY-MM-DD&end=YYYY-MM-DD   — defaults to (current year)-01-01 .. today
 //
-// Success  -> { SG: {rev,ord,uni,dis,vou,cust,ret}, meta:{ live:true, range, years, ... } }
+// Success  -> { SG: {rev,ord,uni,dis,vou,cust,ret,ses,conversion}, meta:{ live:true, ... } }
 // Failure  -> { SG: {}, meta:{ live:false, reason } }                          (not cached)
+//
+// Data sources (both via the same Admin API + token — no Claude/MCP at runtime):
+//   • rev, dis, ord, uni, cust, ret, ses, conversion — ShopifyQL (`shopifyqlQuery`): the
+//     exact figures from the admin Analytics engine. If ShopifyQL is unavailable (older API
+//     version / missing reports access) rev/dis/ord/uni/cust/ret fall back to the Orders
+//     reconstruction and ses/conversion stay absent (front-end shows dashes).
+//   • vou                              — Orders API (gift-card/store-credit orders; ShopifyQL
+//     has no clean column for this).
 
-import { getConfig, fetchOrders, ShopifyError } from "./_shopify.js";
+import { getConfig, fetchOrders, shopifyQL, ShopifyError } from "./_shopify.js";
 import { bucketOrders, monthsWithData } from "../lib/aggregate.js";
+import { buildSalesQL, buildSessionsQL, bucketSales, bucketSessions } from "../lib/shopifyql.js";
 
 const SHOP_TZ = "Asia/Singapore";
 const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -56,6 +65,42 @@ export default async function handler(req, res) {
 
     const metrics = bucketOrders(result.orders, { years, timeZone: SHOP_TZ });
 
+    // Overlay the exact Analytics figures from ShopifyQL where available. These are
+    // independent best-effort calls: if either is unavailable (e.g. an Admin API
+    // version < 2025-10, or a token without reports access) we keep the Orders-based
+    // numbers and the front-end simply shows dashes for Sessions/Conversion.
+    let salesSource = "reconstructed";
+    let sessionsLive = false;
+    let shopifyqlError = null;
+
+    try {
+      const { rows } = await shopifyQL(cfg, buildSalesQL(start, end));
+      const sales = bucketSales(rows, years);
+      // Authoritative — replace the Orders-reconstructed metrics outright. These match the
+      // admin Analytics page exactly (no cancelled-order or first-time/returning drift).
+      for (const y of years) {
+        metrics.rev[y] = sales.rev[y];
+        metrics.dis[y] = sales.dis[y];
+        metrics.ord[y] = sales.ord[y];
+        metrics.uni[y] = sales.uni[y];
+        metrics.cust[y] = sales.cust[y];
+        metrics.ret[y] = sales.ret[y];
+      }
+      salesSource = "shopifyql";
+    } catch (e) {
+      shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
+    }
+
+    try {
+      const { rows } = await shopifyQL(cfg, buildSessionsQL(start, end));
+      const sess = bucketSessions(rows, years);
+      metrics.ses = sess.ses;
+      metrics.conversion = sess.conversion;
+      sessionsLive = true;
+    } catch (e) {
+      if (!shopifyqlError) shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
+    }
+
     res.setHeader("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600");
     return res.status(200).json({
       SG: metrics,
@@ -69,6 +114,10 @@ export default async function handler(req, res) {
         includeCustomer,
         orderCount: result.orders.length,
         truncated: result.truncated,
+        // Where the live sales/sessions numbers came from, so the header can be honest.
+        salesSource, // "shopifyql" (exact, matches admin) | "reconstructed" (Orders fallback)
+        sessionsLive, // true when Sessions/Conversion are live from ShopifyQL
+        ...(shopifyqlError ? { shopifyqlError } : {}),
       },
     });
   } catch (e) {

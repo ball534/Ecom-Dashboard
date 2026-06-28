@@ -14,6 +14,12 @@ import {
   computeAggregate,
   monthsWithData,
 } from "../lib/aggregate.js";
+import {
+  buildSalesQL,
+  buildSessionsQL,
+  bucketSales,
+  bucketSessions,
+} from "../lib/shopifyql.js";
 
 let passed = 0;
 const tests = [];
@@ -261,6 +267,69 @@ test("monthsWithData lists only months that received orders", () => {
   const orders = RAW.map(normalizeOrder);
   const m = bucketOrders(orders, { years: [2026], timeZone: "Asia/Singapore" });
   assert.deepEqual(monthsWithData(m.ord[2026]), [0, 1, 2]);
+});
+
+// ---- ShopifyQL parsing (lib/shopifyql.js) ----
+
+test("buildSalesQL / buildSessionsQL emit the expected ShopifyQL", () => {
+  const s = buildSalesQL("2026-01-01", "2026-06-29");
+  assert.ok(/^FROM sales SHOW gross_sales, discounts, orders/.test(s));
+  assert.ok(s.includes("TIMESERIES month SINCE 2026-01-01 UNTIL 2026-06-29"));
+  const v = buildSessionsQL("2026-01-01", "2026-06-29");
+  assert.ok(/^FROM sessions SHOW sessions, conversion_rate/.test(v));
+  assert.ok(v.includes("TIMESERIES month SINCE 2026-01-01 UNTIL 2026-06-29"));
+});
+
+test("bucketSales maps columns, flips discount sign, derives new customers, nulls empty months", () => {
+  // Rows as shopifyqlQuery returns them: month label + string values. June has no
+  // orders (a future/empty month in ShopifyQL comes back as 0) and must stay null.
+  const rows = [
+    { month: "2026-01-01", gross_sales: "109324.31", discounts: "-9841.47", orders: "1451",
+      quantity_ordered: "4164", customers: "1282", returning_customers: "762" },
+    { month: "2026-02-01", gross_sales: "83503.40", discounts: "-7505.62", orders: "1258",
+      quantity_ordered: "3129", customers: "1143", returning_customers: "615" },
+    { month: "2026-06-01", gross_sales: "0", discounts: "0", orders: "0",
+      quantity_ordered: "0", customers: "0", returning_customers: "0" },
+  ];
+  const m = bucketSales(rows, [2026]);
+  assert.equal(m.rev[2026][0], 109324.31);
+  assert.equal(m.dis[2026][0], 9841.47); // sign flipped to a positive magnitude
+  assert.equal(m.ord[2026][0], 1451);
+  assert.equal(m.uni[2026][0], 4164);
+  assert.equal(m.ret[2026][0], 762);
+  assert.equal(m.cust[2026][0], 1282 - 762); // NEW = customers − returning = 520
+  assert.equal(m.cust[2026][1], 1143 - 615); // 528
+  assert.equal(m.rev[2026][1], 83503.4);
+  assert.equal(m.ord[2026][5], null); // orders:0 -> no data -> blank
+  assert.equal(m.rev[2026][5], null);
+  assert.equal(m.uni[2026][5], null);
+  assert.equal(m.cust[2026][5], null);
+  assert.equal(m.ret[2026][5], null);
+  assert.equal(m.rev[2026][2], null); // March absent from rows -> blank
+});
+
+test("bucketSessions maps sessions + conversion_rate and keeps the rate as a fraction", () => {
+  const rows = [
+    { month: "2026-01-01", sessions: "167920", conversion_rate: "0.008504049547403525" },
+    { month: "2026-07-01", sessions: "0", conversion_rate: "" },
+  ];
+  const m = bucketSessions(rows, [2026]);
+  assert.equal(m.ses[2026][0], 167920);
+  assert.equal(m.conversion[2026][0], 0.008504049547403525);
+  assert.equal(m.ses[2026][6], null); // sessions:0 -> blank
+  assert.equal(m.conversion[2026][6], null);
+});
+
+test("bucketSales splits a multi-year range and ignores out-of-range years", () => {
+  const rows = [
+    { month: "2025-12-01", gross_sales: "5000", discounts: "-100", orders: "80" },
+    { month: "2026-01-01", gross_sales: "6000", discounts: "-200", orders: "90" },
+    { month: "2027-01-01", gross_sales: "9999", discounts: "-9", orders: "9" },
+  ];
+  const m = bucketSales(rows, [2025, 2026]);
+  assert.equal(m.rev[2025][11], 5000); // December 2025
+  assert.equal(m.ord[2026][0], 90); // January 2026
+  assert.ok(!(2027 in m.rev)); // year outside the requested set is dropped entirely
 });
 
 // ---- runner ----

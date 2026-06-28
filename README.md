@@ -17,12 +17,16 @@ will be added in later phases.
   Conversion, Targets, Best Sellers, Channel Mix, …) renders an honest "no data / not
   connected" state — never a fabricated figure. If the API is unavailable the live
   metrics show dashes (not stale numbers).
-- **`api/dashboard.js`** — Vercel serverless function. Pulls iORA SG orders from the
-  Shopify Admin GraphQL API server-side (token stays secret), aggregates them into the
-  dashboard's `{metric: {year: [12 months]}}` shape, and returns JSON. CDN-cached 15 min.
-- **`api/_shopify.js`** — minimal Shopify Admin GraphQL client (zero deps).
-- **`lib/aggregate.js`** — pure aggregation math (order → monthly buckets, aggregates).
-- **`scripts/`** — `verify-token.js` (auth check) and `test.js` (unit tests).
+- **`api/dashboard.js`** — Vercel serverless function. Server-side (token stays secret) it
+  pulls **ShopifyQL** analytics (`shopifyqlQuery`) for the exact sales + sessions figures and
+  the Orders API for the rest, aggregates into the dashboard's `{metric: {year: [12 months]}}`
+  shape, and returns JSON. CDN-cached 15 min.
+- **`api/_shopify.js`** — minimal Shopify Admin GraphQL client (zero deps): `fetchOrders`,
+  `shopifyQL` (ShopifyQL runner), and `verifyToken`.
+- **`lib/aggregate.js`** — pure aggregation math for the Orders path (order → monthly buckets).
+- **`lib/shopifyql.js`** — pure parser that turns ShopifyQL table rows into the metric shape.
+- **`scripts/`** — `verify-token.js` (auth check), `verify-shopifyql.js` (ShopifyQL/version
+  probe), `preview.js` (live month-by-month), and `test.js` (unit tests).
 
 A small status note in the header surfaces only problems (e.g. "Live data unavailable
 (reason)"); on success the live numbers simply appear (dashes while a request is in flight).
@@ -32,9 +36,9 @@ A small status note in the header surfaces only problems (e.g. "Live data unavai
 | Live now (iORA SG, current year) | Coming soon (badged) |
 |---|---|
 | Revenue, Orders, Units, Discounts | Channel Mix (Shopee/Lazada/TikTok) |
-| Voucher orders, New vs Returning customers | Sales Targets, Sale vs Full-price |
-| Live Summary tiles + Key Metrics | Sessions / Traffic / Funnel (Analytics API) |
-| | Best Sellers / Category (product pull) |
+| **Sessions, Conversion** (ShopifyQL) | Sales Targets, Sale vs Full-price |
+| Voucher orders, New vs Returning customers | Traffic sources / Funnel (needs session breakdowns) |
+| Live Summary tiles + Key Metrics | Best Sellers / Category (product pull) |
 | | 2024–2025 history (needs `read_all_orders`) |
 | | The other 7 brands |
 
@@ -43,49 +47,45 @@ A small status note in the header surfaces only problems (e.g. "Live data unavai
 The key in `.env` is a valid `shpat_` Admin API token — `npm run verify-token` authenticates
 against **iORA** (`iora-online.myshopify.com`, SGD, `Asia/Singapore`). Live data flows.
 
-### How the numbers are defined (so they tally with the Shopify admin)
+### Where each number comes from (so they tally with the Shopify admin)
 
-The aggregation matches Shopify's own Analytics reports. Only **test orders** are excluded
-(cancelled orders are kept — Shopify's items/sales reports count them, and revenue uses the
-current total so any refund on them already nets out):
+Two server-side sources, both via the **same Admin API + `shpat_` token** — **no Claude/MCP at runtime:**
 
-| Metric | Definition | Verified (Jan 1–Jun 18 2026) |
-|---|---|---|
-| **Gross Sales** (`rev`) | Shopify "Gross sales" = product price × qty, **before** discounts/returns/tax/shipping. Prices are tax-inclusive (SG GST), so we strip the embedded tax per line at its own rate. | ~530,253 vs **529,494** (≈0.1%) |
-| **Orders** (`ord`) | Count of non-test orders. | 7,664 vs **7,654** |
-| **Units** (`uni`) | **Gross** quantity ordered — Shopify's "Items ordered" (`quantity_ordered`). Does **not** subtract refunds or exclude cancelled. | 22,335 vs **22,334** |
-| **Discounts** (`dis`) | Sum of every line's `discountAllocations` (product + allocated cart discounts), with the embedded GST stripped per line — exactly how Shopify's Analytics "Discounts" is computed (tax-EXCLUDED). | 48,088 vs **48,185** (≈0.2%) |
-| **Avg Order Value** | (Gross Sales − discounts) ÷ orders (computed in the front-end tile) — matches Shopify's AOV. | **62.91 vs 62.88** |
-| **Voucher** (`vou`) | Orders that redeemed a **gift card / store credit** (`paymentGatewayNames`). ⚠️ *Not* "orders with a discount code" — far narrower (≈70/yr). | — |
-| **New / Returning** (`cust`/`ret`) | **Distinct customers** per month. "New" = first-ever order is in-month; else "Returning". See `classifyNewReturning`. | — |
+- **ShopifyQL** (`shopifyqlQuery`, the engine behind the admin Analytics page) → the **exact** figures,
+  no reconstruction: **Gross Sales** (`rev`), **Discounts** (`dis`), **Orders** (`ord`), **Sessions**
+  (`ses`), **Conversion** (`conversion`). See `lib/shopifyql.js`.
+- **Orders API** → **Units** (`uni`), **Voucher** (`vou`), **New/Returning customers** (`cust`/`ret`),
+  which ShopifyQL doesn't expose as clean columns. See `lib/aggregate.js`.
 
-> **Why "Discounts" was wrong before:** the dashboard summed `currentTotalDiscounts`, which is
-> **tax-inclusive** for this SG store — ~6% too high (51,230 vs 48,185), which also pulled AOV off
-> (62.37 vs 62.88). Discounts are now reconstructed pre-tax from per-line allocations, the same
-> tax-stripping already used for Gross Sales. ShopifyQL (the Analytics page's own source) is **not**
-> exposed on the Admin API, so these figures are reconstructed from the Orders API.
+| Metric | Definition |
+|---|---|
+| **Gross Sales** (`rev`) | ShopifyQL `gross_sales` — product price × qty before discounts/returns/tax/shipping. Exact match to the admin. |
+| **Orders** (`ord`) | ShopifyQL `orders` (matches the admin; excludes cancelled, unlike a raw order count). |
+| **Discounts** (`dis`) | ShopifyQL `discounts` (reported negative; stored as a positive magnitude). |
+| **Avg Order Value** | (Gross Sales − discounts) ÷ orders, computed in the front-end tile — equals ShopifyQL `average_order_value`. |
+| **Sessions** (`ses`) | ShopifyQL `sessions` — storefront visits. |
+| **Conversion** (`conversion`) | ShopifyQL `conversion_rate`; aggregated session-weighted (Σ rate·sessions ÷ Σ sessions) so quarter/year totals match the admin. |
+| **Units** (`uni`) | Orders API — **gross** quantity ordered ("Items ordered"); not net of refunds. |
+| **Voucher** (`vou`) | Orders API — orders that redeemed a **gift card / store credit** (`paymentGatewayNames`). ⚠️ *Not* "orders with a discount code". |
+| **New / Returning** (`cust`/`ret`) | Orders API — **distinct customers** per month; "New" = first-ever order is in-month. See `classifyNewReturning`. |
 
-Remaining residuals vs the admin are **live drift** — orders placed between when the Analytics page
-was viewed and when the dashboard queried (the store takes orders all day). The reconstruction itself
-now matches Shopify's definitions; it is not an approximation beyond that drift.
+Residuals vs the admin are **live drift** — orders placed between when the Analytics page was viewed and
+when the dashboard queried (the store takes orders all day).
 
-> Cancelled orders are **kept** (Shopify's items/sales reports count them; refunds net out via the
-> current discount/quantity). Only **test orders** are excluded.
+### ShopifyQL needs API version ≥ 2025-10
 
-### What the Shopify Admin API can and cannot provide
+`shopifyqlQuery` is **not present** on Admin API versions ≤ 2025-07 — which is why an earlier note here
+wrongly concluded ShopifyQL was "removed." It was (re)introduced in **2025-10**; the token already holds
+`read_reports`/`read_analytics`, and the store is on **Shopify Plus**, so it works. `SHOPIFY_API_VERSION`
+is pinned to `2025-10`.
 
-These come straight from the Orders/Customers API: **Gross Sales, Orders, Units, Discounts, Voucher
-(gift-card), New/Returning customers, AOV** (derived). Also readable but not yet surfaced: products,
-inventory, returns, gift cards, markets, channels, marketing events, abandoned checkouts, metaobjects.
+**Fallback:** if `shopifyqlQuery` is ever unavailable (older API version, or a token without reports
+access), `api/dashboard.js` falls back to reconstructing `rev`/`dis`/`ord` from the Orders API line items
+(tax stripped per line) and Sessions/Conversion show **dashes**. `meta.salesSource`
+(`shopifyql` | `reconstructed`) and `meta.sessionsLive` report which path was taken.
 
-**Not available via the Admin API — at all, regardless of scope:** **Sessions** and **Conversion
-rate**. These are web-analytics metrics that live only in the Shopify *Analytics* page (powered by
-ShopifyQL, which Shopify removed from the Admin API — tested & rejected on API versions 2024-04
-through 2025-04). `read_analytics`/`read_reports` are in the token's scopes but **add no API fields**
-for them. The dashboard therefore shows Sessions & Conversion as **dashes (n/a)**. To populate them
-you'd need a separate source (the Analytics UI/export, a GA4 integration, or manual entry).
-
-Run `npm run preview` to print the live month-by-month numbers and eyeball them against the admin.
+Run `npm run verify-shopifyql` to confirm ShopifyQL access + the working API version, and
+`npm run preview` to print the live month-by-month numbers and eyeball them against the admin.
 
 ### Date range (live)
 
@@ -137,11 +137,14 @@ On Vercel, set `SHOPIFY_TOKEN`, `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_API_VERSION` un
 
 ## Verification checklist
 
-- `npm test` → all unit tests pass (aggregation math + tallies).
-- `npm run verify-token` → ✅ once a valid `shpat_` token is set (currently ❌ auth).
-- `vercel dev` → dashboard renders; with a valid token the iORA SG current-year numbers match
-  the Shopify Analytics page (within live drift) and every non-live panel/brand shows an honest
-  "no data" state; with a bad/missing token the live metrics show dashes (no fabricated numbers).
+- `npm test` → all unit tests pass (Orders + ShopifyQL parsing).
+- `npm run verify-token` → ✅ the `shpat_` token authenticates against iORA SG.
+- `npm run verify-shopifyql` → ✅ `shopifyqlQuery` returns live sales + sessions; prints the
+  lowest API version that works (pin `SHOPIFY_API_VERSION` to it).
+- `vercel dev` → dashboard renders; with a valid token the iORA SG current-year numbers — including
+  **Sessions & Conversion** — match the Shopify Analytics page (within live drift), and every
+  non-live panel/brand shows an honest "no data" state; with a bad/missing token the live metrics
+  show dashes (no fabricated numbers).
 
 ## Notes / current limitations
 
@@ -157,6 +160,7 @@ On Vercel, set `SHOPIFY_TOKEN`, `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_API_VERSION` un
 
 ## Roadmap (next integrations)
 
-1. Shopify: products/best-sellers, category mix, sessions/funnel (Analytics API), full history.
+1. Shopify: products/best-sellers, category mix, traffic-source & funnel breakdowns (ShopifyQL
+   `GROUP BY` on sessions), full history.
 2. Sellercraft API (consolidates Shopee/Lazada/TikTok) → Channel Mix + marketplace revenue.
 3. Other brands (TRT, SANS, Monoloq) SG + MY; sales targets ingestion.

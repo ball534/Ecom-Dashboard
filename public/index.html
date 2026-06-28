@@ -1597,8 +1597,20 @@
           unit: "%",
           kind: "line",
           higherBetter: true,
-          desc: "Orders ÷ sessions — traffic efficiency.",
-          series: (y, g) => ratio(B().ord[y], B().ses[y], g, true),
+          desc: "Converting sessions ÷ sessions — traffic efficiency.",
+          // Prefer Shopify Analytics' own conversion_rate (a per-month fraction) so the
+          // figure matches the admin exactly. To aggregate a RATE across months we weight
+          // by sessions: Σ(rate·sessions) ÷ Σsessions (ratio() sums num & den per bucket).
+          // Fallback (no live conversion_rate, e.g. aggregate brands): orders ÷ sessions.
+          series: (y, g) => {
+            const ses = B().ses && B().ses[y];
+            const conv = B().conversion && B().conversion[y];
+            if (ses && conv) {
+              const num = conv.map((r, i) => (r == null || ses[i] == null ? null : r * ses[i]));
+              return ratio(num, ses, g, true);
+            }
+            return ratio(B().ord[y], B().ses[y], g, true);
+          },
         },
         newcust: {
           label: "New Customers",
@@ -2017,16 +2029,29 @@
         // AOV uses a NET basis (gross sales − discounts) ÷ orders — matches Shopify's
         // "average order value", which is lower than gross ÷ orders.
         const aovA = rA != null && oA ? (rA - (dA || 0)) / oA : null,
-          aovB = rB != null && oB ? (rB - (dB || 0)) / oB : null,
-          cvA = oA != null && sA ? (oA / sA) * 100 : null,
-          cvB = oB != null && sB ? (oB / sB) * 100 : null;
+          aovB = rB != null && oB ? (rB - (dB || 0)) / oB : null;
+        // Conversion = Shopify Analytics' conversion_rate, session-weighted over the
+        // window (Σ rate·sessions ÷ Σ sessions) so it matches the admin. Falls back to
+        // orders ÷ sessions when the live rate isn't present (e.g. aggregate brands).
+        const cvWin = (yy) => {
+          const conv = B().conversion && B().conversion[yy];
+          const ses = B().ses && B().ses[yy];
+          if (conv && ses) {
+            const num = win(conv.map((r, i) => (r == null || ses[i] == null ? null : r * ses[i])));
+            const den = win(ses);
+            return num != null && den ? (num / den) * 100 : null;
+          }
+          const o = win(B().ord[yy]), s = win(B().ses[yy]);
+          return o != null && s ? (o / s) * 100 : null;
+        };
+        const cvA = cvWin(yr), cvB = cvWin(prev);
         const T = [
           ["Gross Sales", mny(rA), cmp(rA, rB), rB],
           ["Orders", mi(oA), cmp(oA, oB), oB],
           ["Avg Order Value", mny(aovA), cmp(aovA, aovB), aovB],
           ["Units", mi(uA), cmp(uA, uB), uB],
-          ["Sessions", mi(sA), cmp(sA, sB), sB, "not in Shopify API"],
-          ["Conversion", mp(cvA), cmp(cvA, cvB), cvB, "not in Shopify API"],
+          ["Sessions", mi(sA), cmp(sA, sB), sB],
+          ["Conversion", mp(cvA), cmp(cvA, cvB), cvB],
           ["Customers", mi(cA), cmp(cA, cB), cB],
         ];
         const host = document.getElementById("liveTiles");
@@ -2047,7 +2072,7 @@
         document.getElementById("liveFoot").textContent =
           "Live Shopify data for the selected date range. Gross Sales = product price × qty " +
           "(before discounts & tax); AOV = (gross − discounts) ÷ orders. Sessions & Conversion " +
-          "are not available via the Shopify API. Currency " + CUR.code + ".";
+          "come from Shopify Analytics (ShopifyQL). Currency " + CUR.code + ".";
       }
       function render() {
         const m = METRICS[state.metric];
@@ -7132,10 +7157,11 @@
         });
       }
 
-      // Metrics tied to the live window. The API returns all of these EXCEPT `ses`
-      // (sessions/conversion aren't exposed by the Shopify API) — `ses` is included so
-      // it shows dashes (n/a) over the live range rather than stale baseline numbers.
-      var LIVE_METRICS = ["rev", "ord", "uni", "dis", "vou", "cust", "ret", "ses"];
+      // Metrics tied to the live window, all supplied by /api/dashboard. `rev`/`dis`/`ord`
+      // and `ses`/`conversion` come from Shopify Analytics (ShopifyQL); `uni`/`vou`/`cust`/
+      // `ret` from the Orders API. If ShopifyQL is unavailable the API omits `ses`/`conversion`
+      // (and serves reconstructed sales), so they fall back to dashes over the live range.
+      var LIVE_METRICS = ["rev", "ord", "uni", "dis", "vou", "cust", "ret", "ses", "conversion"];
       var SG_BASELINE = null; // one-time stash of the original baseline for those metrics
 
       function snapshotBaseline() {

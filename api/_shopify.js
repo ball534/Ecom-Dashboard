@@ -5,7 +5,10 @@
 
 import { normalizeOrder } from "../lib/aggregate.js";
 
-const DEFAULT_API_VERSION = "2025-04";
+// 2025-10 is the earliest Admin API version that exposes `shopifyqlQuery` (ShopifyQL).
+// Older versions (<=2025-07) lack the field; the dashboard then falls back to the
+// Orders-based reconstruction for sales (Sessions/Conversion show dashes).
+const DEFAULT_API_VERSION = "2025-10";
 
 export class ShopifyError extends Error {
   constructor(reason, message, status) {
@@ -80,6 +83,45 @@ export async function verifyToken(cfg) {
     `{ shop { name myshopifyDomain ianaTimezone currencyCode } }`,
   );
   return data.shop;
+}
+
+// Run a ShopifyQL query through the Admin API's `shopifyqlQuery` field — the same
+// engine that powers the admin Analytics page. This gives the EXACT Gross Sales /
+// Discounts / Orders figures (no per-line reconstruction) and the web-analytics
+// metrics (Sessions, Conversion) that the Orders API cannot provide. Requires the
+// read_reports / read_analytics scopes (and, for some datasets, a Shopify Plus shop).
+//
+// Returns { columns: [{name, dataType}], rows: [ {col: value, ...}, ... ] }.
+// Rows come back as JSON objects keyed by column name. A ShopifyQL parse/permission
+// problem surfaces as ShopifyError("scope", ...) so callers can fall back gracefully.
+const SHOPIFYQL_QUERY = `
+query ShopifyQL($q: String!) {
+  shopifyqlQuery(query: $q) {
+    parseErrors
+    tableData {
+      columns { name dataType }
+      rows
+    }
+  }
+}`;
+
+export async function shopifyQL(cfg, ql) {
+  const data = await shopifyGraphQL(cfg, SHOPIFYQL_QUERY, { q: ql });
+  const resp = data?.shopifyqlQuery;
+  // parseErrors is a list of strings; a non-empty list means the query was rejected
+  // (bad column, no analytics access, etc.). Treat it as a scope/availability problem
+  // so api/dashboard.js can fall back to the Orders reconstruction.
+  const errs = Array.isArray(resp?.parseErrors) ? resp.parseErrors.filter(Boolean) : [];
+  if (errs.length) {
+    throw new ShopifyError("scope", `ShopifyQL parse error: ${errs.join("; ")}`);
+  }
+  const table = resp?.tableData;
+  if (!table) {
+    throw new ShopifyError("scope", "ShopifyQL returned no tableData (no analytics access for this token?)");
+  }
+  const columns = Array.isArray(table.columns) ? table.columns : [];
+  const rows = Array.isArray(table.rows) ? table.rows : [];
+  return { columns, rows };
 }
 
 // first:100 keeps the GraphQL cost under the cap now that we read per-line
