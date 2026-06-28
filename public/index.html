@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en-GB">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
@@ -760,9 +760,9 @@
           <div class="daterange">
             <div class="dr-inputs">
               <label for="liveStart">From</label>
-              <input type="date" id="liveStart" />
+              <input type="date" id="liveStart" lang="en-GB" />
               <label for="liveEnd">To</label>
-              <input type="date" id="liveEnd" />
+              <input type="date" id="liveEnd" lang="en-GB" />
             </div>
             <div class="dr-presets" id="datePresets">
               <button type="button" data-preset="mtd">This month</button>
@@ -1568,6 +1568,17 @@
           desc: "Number of orders placed — the main volume driver.",
           series: (y, g) => agg(B().ord[y], g),
         },
+        ordfulfilled: {
+          label: "Orders Fulfilled",
+          unit: "",
+          kind: "line",
+          higherBetter: true,
+          // Distinct from Order Count: an order placed late in a month may ship the next
+          // month, so this matches Shopify's "Orders fulfilled" report rather than "Orders".
+          desc: "Orders fulfilled (shipped) — Shopify's fulfillments report, not orders placed.",
+          series: (y, g) =>
+            B().ordf && B().ordf[y] ? agg(B().ordf[y], g) : nulls(g),
+        },
         aov: {
           label: "Average Order Value",
           unit: "$",
@@ -1651,6 +1662,7 @@
       const KPI_ORDER = [
         "revenue",
         "orders",
+        "ordfulfilled",
         "aov",
         "units",
         "sessions",
@@ -1917,12 +1929,18 @@
         // chip appears only when a real prior-year value exists (else "YTD").
         const PY = liveState.year,
           PRY = PY - 1;
+        // Only show a YoY % when the current year is COMPLETE (12 months of data).
+        // Otherwise the headline value stays the year-to-date aggregate but the chip
+        // reads "YTD" — comparing a partial year against a full prior year would be
+        // misleading. Like-for-like windowed YoY lives in the Live Summary tiles.
+        const curComplete =
+          METRICS.revenue.series(PY, "month").filter((v) => v != null).length >= 12;
         KPI_ORDER.forEach((k, idx) => {
           const m = METRICS[k];
           const vPr = m.series(PRY, "year")[0],
             vP = m.series(PY, "year")[0];
           let d =
-              vPr != null && vP != null && vPr
+              curComplete && vPr != null && vP != null && vPr
                 ? ((vP - vPr) / vPr) * 100
                 : null,
             cls = "flat",
@@ -1990,6 +2008,10 @@
         }
       }
       function renderLive() {
+        // The Live Summary reflects the date-range picker (a windowed fetch stored in
+        // LIVE_WIN), while the chart/KPIs read full history from B(). When no window has
+        // loaded yet (or for non-SG brands) fall back to B() so tiles still render.
+        const LD = state.brand === "SG" && LIVE_WIN ? LIVE_WIN : B();
         const yr = liveState.year,
           prev = yr - 1;
         const lead = (arr) => {
@@ -2000,7 +2022,7 @@
           });
           return last < 0 ? 12 : last + 1;
         };
-        const n = Math.max(1, lead(B().rev[yr]));
+        const n = Math.max(1, lead(LD.rev[yr]));
         const full = n >= 12,
           wlab = full ? "Full Year" : "Jan–" + MONTHS[n - 1];
         const win = (arr) => {
@@ -2012,20 +2034,20 @@
         const mny = (v) => (v == null ? "–" : money(v)),
           mi = (v) => (v == null ? "–" : int(v)),
           mp = (v) => (v == null ? "–" : pct(v));
-        const hasPrev = !!B().rev[prev] && !(B().launch24 && prev <= 2024);
+        const hasPrev = !!LD.rev[prev] && !(B().launch24 && prev <= 2024);
         const cmp = (a, b) => (hasPrev && a != null && b ? a : null);
-        const rA = win(B().rev[yr]),
-          rB = win(B().rev[prev]),
-          oA = win(B().ord[yr]),
-          oB = win(B().ord[prev]),
-          uA = win(B().uni[yr]),
-          uB = win(B().uni[prev]),
-          sA = win(B().ses[yr]),
-          sB = win(B().ses[prev]),
-          cA = add(win(B().cust[yr]), win(B().ret[yr])),
-          cB = add(win(B().cust[prev]), win(B().ret[prev])),
-          dA = win(B().dis[yr]),
-          dB = win(B().dis[prev]);
+        const rA = win(LD.rev[yr]),
+          rB = win(LD.rev[prev]),
+          oA = win(LD.ord[yr]),
+          oB = win(LD.ord[prev]),
+          uA = win(LD.uni[yr]),
+          uB = win(LD.uni[prev]),
+          sA = win(LD.ses[yr]),
+          sB = win(LD.ses[prev]),
+          cA = add(win(LD.cust[yr]), win(LD.ret[yr])),
+          cB = add(win(LD.cust[prev]), win(LD.ret[prev])),
+          dA = win(LD.dis[yr]),
+          dB = win(LD.dis[prev]);
         // AOV uses a NET basis (gross sales − discounts) ÷ orders — matches Shopify's
         // "average order value", which is lower than gross ÷ orders.
         const aovA = rA != null && oA ? (rA - (dA || 0)) / oA : null,
@@ -2034,20 +2056,23 @@
         // window (Σ rate·sessions ÷ Σ sessions) so it matches the admin. Falls back to
         // orders ÷ sessions when the live rate isn't present (e.g. aggregate brands).
         const cvWin = (yy) => {
-          const conv = B().conversion && B().conversion[yy];
-          const ses = B().ses && B().ses[yy];
+          const conv = LD.conversion && LD.conversion[yy];
+          const ses = LD.ses && LD.ses[yy];
           if (conv && ses) {
             const num = win(conv.map((r, i) => (r == null || ses[i] == null ? null : r * ses[i])));
             const den = win(ses);
             return num != null && den ? (num / den) * 100 : null;
           }
-          const o = win(B().ord[yy]), s = win(B().ses[yy]);
+          const o = win(LD.ord[yy]), s = win(LD.ses[yy]);
           return o != null && s ? (o / s) * 100 : null;
         };
         const cvA = cvWin(yr), cvB = cvWin(prev);
+        const ofA = win(LD.ordf && LD.ordf[yr]),
+          ofB = win(LD.ordf && LD.ordf[prev]);
         const T = [
           ["Gross Sales", mny(rA), cmp(rA, rB), rB],
           ["Orders", mi(oA), cmp(oA, oB), oB],
+          ["Orders Fulfilled", mi(ofA), cmp(ofA, ofB), ofB],
           ["Avg Order Value", mny(aovA), cmp(aovA, aovB), aovB],
           ["Units", mi(uA), cmp(uA, uB), uB],
           ["Sessions", mi(sA), cmp(sA, sB), sB],
@@ -7161,8 +7186,12 @@
       // and `ses`/`conversion` come from Shopify Analytics (ShopifyQL); `uni`/`vou`/`cust`/
       // `ret` from the Orders API. If ShopifyQL is unavailable the API omits `ses`/`conversion`
       // (and serves reconstructed sales), so they fall back to dashes over the live range.
-      var LIVE_METRICS = ["rev", "ord", "uni", "dis", "vou", "cust", "ret", "ses", "conversion"];
+      var LIVE_METRICS = ["rev", "ord", "ordf", "uni", "dis", "vou", "cust", "ret", "ses", "conversion"];
       var SG_BASELINE = null; // one-time stash of the original baseline for those metrics
+      // Windowed live data for the date-range picker (drives the Live Summary only). The
+      // chart + KPIs read full history from BRANDS.SG, so narrowing the picker never blanks
+      // the year-on-year comparison. {metric: {year: [12]}} or null before the first load.
+      var LIVE_WIN = null;
 
       function snapshotBaseline() {
         if (SG_BASELINE) return;
@@ -7273,27 +7302,48 @@
         if (typeof state !== "undefined") setBrand(state.brand);
       }
 
-      // Fetch live Shopify data for [start,end]. While in flight the covered years
-      // show dashes (not stale baseline); on success they're replaced with live data;
-      // on failure the baseline is restored so the page is never empty.
-      function loadLive(start, end) {
+      // Fetch JSON with a few retries + exponential backoff. Vercel serverless functions
+      // can cold-start on the first request, so one transient failure shouldn't leave the
+      // dashboard empty on launch. Resolves to the parsed payload, or rejects if all fail.
+      function fetchJSON(url, tries) {
+        function attempt(left, delay) {
+          return fetch(url)
+            .then(function (r) {
+              if (!r.ok) throw new Error("HTTP " + r.status);
+              return r.json();
+            })
+            .catch(function (err) {
+              if (left <= 1) throw err;
+              return new Promise(function (res) { setTimeout(res, delay); }).then(
+                function () { return attempt(left - 1, delay * 2); },
+              );
+            });
+        }
+        return attempt(tries || 3, 700);
+      }
+
+      var TODAY_STR = (function () {
+        var d = new Date(),
+          p = function (x) { return String(x).padStart(2, "0"); };
+        return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
+      })();
+
+      // FULL-HISTORY load — ShopifyQL-only `light` mode (one fast round trip per dataset,
+      // no order pagination, so it can't cold-start-timeout). Populates BRANDS.SG for ALL
+      // years, so the year-on-year chart + KPIs always show 2024/2025/2026 regardless of
+      // the date-range picker. Runs once on launch.
+      function loadHistory() {
         snapshotBaseline();
-        var years = [];
-        for (var y = +start.slice(0, 4); y <= +end.slice(0, 4); y++) years.push(y);
-        // Summary tiles read liveState.year — point them at the range's latest year.
-        if (typeof liveState !== "undefined") liveState.year = years[years.length - 1];
-        blankLive(years);
+        blankLive([2024, 2025, 2026]);
         setLiveStatus("", "");
         reRender();
-
-        fetch("/api/dashboard?start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end))
-          .then(function (r) { return r.json(); })
+        return fetchJSON("/api/dashboard?light=1&start=2024-01-01&end=" + encodeURIComponent(TODAY_STR))
           .then(function (payload) {
             if (applyLive(payload)) {
               window.__LIVE_SG = true;
               setLiveStatus("", "ok");
             } else {
-              restoreBaseline(years);
+              restoreBaseline([2024, 2025, 2026]);
               var reason = payload && payload.meta ? payload.meta.reason : "unknown";
               setLiveStatus("Live data unavailable (" + reason + ") — showing baseline.", "warn");
             }
@@ -7301,10 +7351,40 @@
             reRender();
           })
           .catch(function () {
-            restoreBaseline(years);
+            restoreBaseline([2024, 2025, 2026]);
             setLiveStatus("Live data unavailable (offline) — showing baseline.", "warn");
             reRender();
           });
+      }
+
+      // WINDOWED load for the date-range picker — drives the Live Summary only (LIVE_WIN),
+      // never the chart/KPIs. Full mode (includes the Orders API `vou` reconstruction).
+      function loadWindow(start, end) {
+        var years = [];
+        for (var y = +start.slice(0, 4); y <= +end.slice(0, 4); y++) years.push(y);
+        // Summary tiles read liveState.year — point them at the range's latest year.
+        if (typeof liveState !== "undefined") liveState.year = years[years.length - 1];
+        LIVE_WIN = null; // dashes in the summary while the window is in flight
+        reRender();
+        return fetchJSON("/api/dashboard?start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end))
+          .then(function (payload) {
+            LIVE_WIN =
+              payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
+            // `vou` has no ShopifyQL column, so it is absent from the light history load.
+            // Merge it from this full window fetch so the Voucher KPI still populates for
+            // the selected window's year (other metrics stay on full history).
+            if (LIVE_WIN && LIVE_WIN.vou) {
+              BRANDS.SG.vou = BRANDS.SG.vou || {};
+              Object.keys(LIVE_WIN.vou).forEach(function (yr) {
+                var arr = Array(12).fill(null);
+                (LIVE_WIN.vou[yr] || []).forEach(function (v, i) { if (v != null) arr[i] = v; });
+                BRANDS.SG.vou[yr] = arr;
+              });
+              rebuildAggs();
+            }
+            reRender();
+          })
+          .catch(function () { LIVE_WIN = null; reRender(); });
       }
 
       // Render baseline shell first, then load live data for the default window.
@@ -7338,7 +7418,7 @@
           if (startEl) { startEl.value = start; startEl.max = todayStr; }
           if (endEl) { endEl.value = end; endEl.max = todayStr; }
           setActivePreset(preset);
-          loadLive(start, end);
+          loadWindow(start, end);
         }
         // Editing a date by hand clears the active preset highlight.
         function onManual() {
@@ -7346,7 +7426,7 @@
           var e = endEl && endEl.value ? endEl.value : todayStr;
           if (s > e) { var t = s; s = e; e = t; if (startEl) startEl.value = s; if (endEl) endEl.value = e; }
           setActivePreset(null);
-          loadLive(s, e);
+          loadWindow(s, e);
         }
         if (startEl) startEl.addEventListener("change", onManual);
         if (endEl) endEl.addEventListener("change", onManual);
@@ -7359,7 +7439,11 @@
           });
         }
 
-        var def = rangeFor("ytd"); // default view: year to date
+        // Load full 2024–2026 history once (drives the chart + KPIs), then apply the
+        // default picker window (drives the Live Summary). The chart never goes blank
+        // when the picker is narrowed, because it reads the persisted history.
+        loadHistory();
+        var def = rangeFor("ytd"); // default Live Summary window: year to date
         apply(def[0], def[1], "ytd");
       })();
     </script>

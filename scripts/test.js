@@ -17,8 +17,10 @@ import {
 import {
   buildSalesQL,
   buildSessionsQL,
+  buildFulfillmentsQL,
   bucketSales,
   bucketSessions,
+  bucketFulfillments,
 } from "../lib/shopifyql.js";
 
 let passed = 0;
@@ -306,6 +308,19 @@ test("bucketSales maps columns, flips discount sign, derives new customers, null
   assert.equal(m.cust[2026][5], null);
   assert.equal(m.ret[2026][5], null);
   assert.equal(m.rev[2026][2], null); // March absent from rows -> blank
+});
+
+test("buildFulfillmentsQL emits the expected ShopifyQL and bucketFulfillments maps orders_fulfilled", () => {
+  const q = buildFulfillmentsQL("2026-01-01", "2026-06-29");
+  assert.ok(/^FROM fulfillments SHOW orders_fulfilled/.test(q));
+  assert.ok(q.includes("TIMESERIES month SINCE 2026-01-01 UNTIL 2026-06-29"));
+  const rows = [
+    { month: "2026-01-01", orders_fulfilled: "1422" },
+    { month: "2026-07-01", orders_fulfilled: "0" }, // no fulfilments -> blank
+  ];
+  const m = bucketFulfillments(rows, [2026]);
+  assert.equal(m.ordf[2026][0], 1422);
+  assert.equal(m.ordf[2026][6], null);
 });
 
 test("bucketSessions maps sessions + conversion_rate and keeps the rate as a fraction", () => {

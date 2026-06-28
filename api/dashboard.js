@@ -18,8 +18,27 @@
 //     has no clean column for this).
 
 import { getConfig, fetchOrders, shopifyQL, ShopifyError } from "./_shopify.js";
-import { bucketOrders, monthsWithData } from "../lib/aggregate.js";
-import { buildSalesQL, buildSessionsQL, bucketSales, bucketSessions } from "../lib/shopifyql.js";
+import { bucketOrders, monthsWithData, emptyYear, ORDER_METRICS } from "../lib/aggregate.js";
+import {
+  buildSalesQL,
+  buildSessionsQL,
+  buildFulfillmentsQL,
+  bucketSales,
+  bucketSessions,
+  bucketFulfillments,
+} from "../lib/shopifyql.js";
+
+// An all-null metrics skeleton (no Orders API pull). Used by `light` mode, where the
+// front-end wants the exact ShopifyQL Analytics figures across a multi-year range
+// without paging tens of thousands of orders for the `vou` reconstruction.
+function emptyMetrics(years) {
+  const out = {};
+  for (const m of [...ORDER_METRICS, "ordf"]) {
+    out[m] = {};
+    for (const y of years) out[m][y] = emptyYear();
+  }
+  return out;
+}
 
 const SHOP_TZ = "Asia/Singapore";
 const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
@@ -44,6 +63,13 @@ export default async function handler(req, res) {
   let end = isDate(q.end) ? q.end : today;
   if (start > end) [start, end] = [end, start]; // tolerate swapped inputs
 
+  // `light=1` skips the Orders API pagination entirely and returns ONLY the ShopifyQL
+  // Analytics figures. The dashboard uses it to load full multi-year history fast (one
+  // round trip per dataset) for the year-on-year chart, without risking a cold-start
+  // timeout while paging orders. `vou` (gift-card/store-credit orders) is omitted in
+  // this mode since it has no ShopifyQL column.
+  const light = q.light === "1" || q.light === "true";
+
   const years = [];
   for (let y = Number(start.slice(0, 4)); y <= Number(end.slice(0, 4)); y++) years.push(y);
 
@@ -51,19 +77,25 @@ export default async function handler(req, res) {
     // Try with customer data (new vs returning). If the app lacks protected-
     // customer-data approval, retry without it so the other metrics still load.
     let includeCustomer = true;
-    let result;
-    try {
-      result = await fetchOrders(cfg, { start, end, includeCustomer });
-    } catch (e) {
-      if (e instanceof ShopifyError && e.reason === "scope") {
-        includeCustomer = false;
+    let result = { orders: [], truncated: false };
+    if (!light) {
+      try {
         result = await fetchOrders(cfg, { start, end, includeCustomer });
-      } else {
-        throw e;
+      } catch (e) {
+        if (e instanceof ShopifyError && e.reason === "scope") {
+          includeCustomer = false;
+          result = await fetchOrders(cfg, { start, end, includeCustomer });
+        } else {
+          throw e;
+        }
       }
     }
 
-    const metrics = bucketOrders(result.orders, { years, timeZone: SHOP_TZ });
+    const metrics = light
+      ? emptyMetrics(years)
+      : Object.assign(bucketOrders(result.orders, { years, timeZone: SHOP_TZ }), {
+          ordf: Object.fromEntries(years.map((y) => [y, emptyYear()])),
+        });
 
     // Overlay the exact Analytics figures from ShopifyQL where available. These are
     // independent best-effort calls: if either is unavailable (e.g. an Admin API
@@ -101,6 +133,15 @@ export default async function handler(req, res) {
       if (!shopifyqlError) shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
     }
 
+    // Orders FULFILLED (fulfillments dataset) — shown alongside orders placed. Best-effort:
+    // if unavailable, `ordf` stays null and the front-end hides that card.
+    try {
+      const { rows } = await shopifyQL(cfg, buildFulfillmentsQL(start, end));
+      metrics.ordf = bucketFulfillments(rows, years).ordf;
+    } catch (e) {
+      if (!shopifyqlError) shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
+    }
+
     res.setHeader("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600");
     return res.status(200).json({
       SG: metrics,
@@ -111,7 +152,8 @@ export default async function handler(req, res) {
         years,
         // months with data, keyed by year, so the front-end can label the window.
         monthsLive: Object.fromEntries(years.map((y) => [y, monthsWithData(metrics.ord[y])])),
-        includeCustomer,
+        light,
+        includeCustomer: light ? false : includeCustomer,
         orderCount: result.orders.length,
         truncated: result.truncated,
         // Where the live sales/sessions numbers came from, so the header can be honest.
