@@ -2102,7 +2102,7 @@
         // The Live Summary reflects the date-range picker (a windowed fetch stored in
         // LIVE_WIN), while the chart/KPIs read full history from B(). When no window has
         // loaded yet (or for non-SG brands) fall back to B() so tiles still render.
-        const LD = state.brand === "SG" && LIVE_WIN ? LIVE_WIN : B();
+        const LD = LIVE_WIN[state.brand] ? LIVE_WIN[state.brand] : B();
         const yr = liveState.year,
           prev = yr - 1;
         const lead = (arr) => {
@@ -7045,9 +7045,16 @@
         if (b === "GROUP") renderGroup();
         else if (b === "SGALL" || b === "MYALL") renderCompare();
       }
+      // Select a brand: render it immediately from whatever data is present (baseline or
+      // already-loaded live), then kick off its live load. Loading is triggered here (on
+      // user action) rather than in setBrand, because setBrand is also called by reRender.
+      function onBrandSelect(b) {
+        setBrand(b);
+        ensureLive(b);
+      }
       document
         .querySelectorAll("#brandSeg button")
-        .forEach((b) => (b.onclick = () => setBrand(b.dataset.b)));
+        .forEach((b) => (b.onclick = () => onBrandSelect(b.dataset.b)));
       document.querySelectorAll("#liveYear button").forEach(
         (b) =>
           (b.onclick = () => {
@@ -7278,57 +7285,87 @@
       // `ret` from the Orders API. If ShopifyQL is unavailable the API omits `ses`/`conversion`
       // (and serves reconstructed sales), so they fall back to dashes over the live range.
       var LIVE_METRICS = ["rev", "ord", "ordf", "uni", "dis", "vou", "cust", "ret", "ses", "conversion"];
-      var SG_BASELINE = null; // one-time stash of the original baseline for those metrics
-      // Windowed live data for the date-range picker (drives the Live Summary only). The
-      // chart + KPIs read full history from BRANDS.SG, so narrowing the picker never blanks
-      // the year-on-year comparison. {metric: {year: [12]}} or null before the first load.
-      var LIVE_WIN = null;
 
-      function snapshotBaseline() {
-        if (SG_BASELINE) return;
-        SG_BASELINE = {};
+      // Individual stores that can be served live (one Shopify store each, via
+      // /api/dashboard?brand=<KEY>). The roll-up brands below are computed client-side
+      // from these members by rebuildAggs, so they never fetch directly.
+      var LIVE_BRANDS = ["SG", "MY", "TRTSG", "TRTMY", "SANSSG", "SANSMY", "MONOSG", "MONOMY"];
+      var AGG_MEMBERS = {
+        SGALL: ["SG", "TRTSG", "SANSSG", "MONOSG"],
+        MYALL: ["MY", "TRTMY", "SANSMY", "MONOMY"],
+        GROUP: ["SG", "TRTSG", "SANSSG", "MONOSG", "MY", "TRTMY", "SANSMY", "MONOMY"],
+      };
+      function isLiveBrand(b) { return LIVE_BRANDS.indexOf(b) >= 0; }
+
+      // Per-brand state, keyed by brand:
+      //   BASELINE[b] — one-time stash of the original (Excel) baseline for LIVE_METRICS
+      //   LIVE_WIN[b] — windowed live data for the date-range picker (drives the Live
+      //                 Summary only; the chart + KPIs read full history from BRANDS[b],
+      //                 so narrowing the picker never blanks the year-on-year comparison)
+      //   LIVE[b]     — load bookkeeping (see liveInfo)
+      var BASELINE = {};
+      var LIVE_WIN = {};
+      var LIVE = {};
+      function liveInfo(b) {
+        return (LIVE[b] = LIVE[b] || {
+          historyLoading: false, // a full-history fetch is in flight
+          ok: false,             // live history is currently applied
+          settled: false,        // resolved (live or not-configured) — don't auto-retry
+          winRange: null,        // "start|end" the current LIVE_WIN[b] was loaded for
+          winLoading: false,     // a window fetch is in flight
+        });
+      }
+      // Current picker window, shared across brands.
+      var curStart = null, curEnd = null;
+
+      function snapshotBaseline(brand) {
+        if (BASELINE[brand]) return;
+        var snap = (BASELINE[brand] = {});
         LIVE_METRICS.forEach(function (m) {
-          SG_BASELINE[m] = {};
-          Object.keys(BRANDS.SG[m] || {}).forEach(function (y) {
-            SG_BASELINE[m][y] = (BRANDS.SG[m][y] || []).slice();
+          snap[m] = {};
+          Object.keys(BRANDS[brand][m] || {}).forEach(function (y) {
+            snap[m][y] = (BRANDS[brand][m][y] || []).slice();
           });
         });
       }
 
       // Show "data not loaded yet" dashes for the years we're about to (re)load.
-      function blankLive(years) {
+      function blankLive(brand, years) {
         LIVE_METRICS.forEach(function (m) {
-          BRANDS.SG[m] = BRANDS.SG[m] || {};
-          years.forEach(function (y) { BRANDS.SG[m][y] = Array(12).fill(null); });
+          BRANDS[brand][m] = BRANDS[brand][m] || {};
+          years.forEach(function (y) { BRANDS[brand][m][y] = Array(12).fill(null); });
         });
         rebuildAggs();
       }
 
       // Put the original baseline back for the given years (used when live fails).
-      function restoreBaseline(years) {
-        if (!SG_BASELINE) return;
+      function restoreBaseline(brand, years) {
+        var snap = BASELINE[brand];
+        if (!snap) return;
         LIVE_METRICS.forEach(function (m) {
-          if (!SG_BASELINE[m]) return;
+          if (!snap[m]) return;
           years.forEach(function (y) {
-            if (SG_BASELINE[m][y]) BRANDS.SG[m][y] = SG_BASELINE[m][y].slice();
-            else if (BRANDS.SG[m]) delete BRANDS.SG[m][y];
+            if (snap[m][y]) BRANDS[brand][m][y] = snap[m][y].slice();
+            else if (BRANDS[brand][m]) delete BRANDS[brand][m][y];
           });
         });
         rebuildAggs();
       }
 
-      // REPLACE SG's covered years with the live payload, so months outside the
-      // selected range render as dashes rather than stale baseline numbers.
-      function applyLive(payload) {
+      // REPLACE the brand's covered years with the live payload, so months outside the
+      // selected range render as dashes rather than stale baseline numbers. (The API
+      // returns the metrics under the `SG` container key regardless of which brand was
+      // requested — it's just the payload envelope, not the brand.)
+      function applyLive(brand, payload) {
         if (!payload || !payload.SG || !payload.meta || !payload.meta.live) return false;
         var live = payload.SG;
         LIVE_METRICS.forEach(function (m) {
           if (!live[m]) return;
-          BRANDS.SG[m] = BRANDS.SG[m] || {};
+          BRANDS[brand][m] = BRANDS[brand][m] || {};
           Object.keys(live[m]).forEach(function (yr) {
             var arr = Array(12).fill(null);
             (live[m][yr] || []).forEach(function (v, i) { if (v != null) arr[i] = v; });
-            BRANDS.SG[m][yr] = arr;
+            BRANDS[brand][m][yr] = arr;
           });
         });
         rebuildAggs();
@@ -7363,15 +7400,23 @@
         }
       }
 
-      // Brands without a live integration yet -> "soon" hint on their buttons.
+      // Individual store brands start with a "soon" hint until their live data loads
+      // (SG is always live). As each brand resolves, markBrandLive() clears or keeps it.
       function markComingSoonBrands() {
         document
           .querySelectorAll('#brandSeg button[data-b]:not([data-b="SG"])')
-          .forEach(function (b) { b.classList.add("cs-soon"); });
+          .forEach(function (b) {
+            if (isLiveBrand(b.dataset.b)) b.classList.add("cs-soon");
+          });
+      }
+      // Toggle the "soon" hint on a brand button once we know if it's live.
+      function markBrandLive(brand, ok) {
+        var btn = document.querySelector('#brandSeg button[data-b="' + brand + '"]');
+        if (btn) btn.classList.toggle("cs-soon", !ok);
       }
 
       // Panels not yet backed by live Shopify data -> small "Coming soon" badge.
-      // Only shown on the live SG view; baseline views for other brands stay clean.
+      // Shown on any live store view; baseline-only views stay clean.
       function markComingSoonPanels(isLiveSG) {
         var SOON = [
           "chanPanel", "tgtPanel", "sessPanel", "funnelPanel", "saleMixPanel",
@@ -7496,49 +7541,91 @@
         return { start: start, done: done };
       })();
 
+      // Load a brand's full 2024–2026 history once (drives its chart + KPIs). No-ops once
+      // the brand has settled (live or not-configured) or a load is already in flight.
+      function ensureHistory(brand) {
+        if (!isLiveBrand(brand)) return;
+        var info = liveInfo(brand);
+        if (!info.settled && !info.historyLoading) loadHistory(brand);
+      }
+      // Ensure a brand's live data is loaded. Called on brand selection. For an individual
+      // store: load history + the current picker window (the Live Summary reads the window).
+      // For a roll-up: just load each member's history — the aggregate's Live Summary is
+      // computed from members' full history, so it doesn't need per-member windows.
+      function ensureLive(brand) {
+        if (AGG_MEMBERS[brand]) { AGG_MEMBERS[brand].forEach(ensureHistory); return; }
+        if (!isLiveBrand(brand)) return;
+        ensureHistory(brand);
+        var info = liveInfo(brand);
+        var key = curStart + "|" + curEnd;
+        if (info.winRange !== key && !info.winLoading) loadWindow(brand, curStart, curEnd);
+      }
+
       // FULL-HISTORY load — ShopifyQL-only `light` mode (one fast round trip per dataset,
-      // no order pagination, so it can't cold-start-timeout). Populates BRANDS.SG for ALL
-      // years, so the year-on-year chart + KPIs always show 2024/2025/2026 regardless of
-      // the date-range picker. Runs once on launch.
-      function loadHistory() {
-        snapshotBaseline();
-        blankLive([2024, 2025, 2026]);
-        setLiveStatus("", "");
-        ConnIndicator.start();
+      // no order pagination, so it can't cold-start-timeout). Populates BRANDS[brand] for
+      // ALL years, so the year-on-year chart + KPIs always show 2024/2025/2026 regardless
+      // of the date-range picker. Runs once per brand (on launch for SG, on first select
+      // for the rest). The connection indicator is only driven for the on-screen brand.
+      function loadHistory(brand) {
+        var info = liveInfo(brand);
+        var current = brand === state.brand;
+        info.historyLoading = true;
+        snapshotBaseline(brand);
+        blankLive(brand, [2024, 2025, 2026]);
+        if (current) { setLiveStatus("", ""); ConnIndicator.start(); }
         reRender();
-        return fetchJSON("/api/dashboard?light=1&start=2024-01-01&end=" + encodeURIComponent(TODAY_STR))
+        return fetchJSON("/api/dashboard?light=1&brand=" + brand + "&start=2024-01-01&end=" + encodeURIComponent(TODAY_STR))
           .then(function (payload) {
-            if (applyLive(payload)) {
-              window.__LIVE_SG = true;
-              setLiveStatus("", "ok");
-              ConnIndicator.done(true);
+            info.historyLoading = false;
+            if (applyLive(brand, payload)) {
+              info.ok = true; info.settled = true;
+              markBrandLive(brand, true);
+              if (current) { setLiveStatus("", "ok"); ConnIndicator.done(true); }
             } else {
-              restoreBaseline([2024, 2025, 2026]);
+              info.ok = false;
+              restoreBaseline(brand, [2024, 2025, 2026]);
               var reason = payload && payload.meta ? payload.meta.reason : "unknown";
-              setLiveStatus("Live data unavailable (" + reason + ") — showing baseline.", "warn");
-              ConnIndicator.done(false);
+              // "not-configured" is expected for stores without tokens yet — settle it so
+              // we don't retry, and keep the "soon" hint. Other reasons stay retryable.
+              info.settled = reason === "not-configured";
+              markBrandLive(brand, false);
+              if (current) {
+                var msg = reason === "not-configured"
+                  ? "Live data not set up for " + BRANDS[brand].name + " — showing baseline."
+                  : "Live data unavailable (" + reason + ") — showing baseline.";
+                setLiveStatus(msg, "warn");
+                ConnIndicator.done(false);
+              }
             }
-            markComingSoonPanels(window.__LIVE_SG === true);
+            if (current) markComingSoonPanels(info.ok);
             reRender();
           })
           .catch(function () {
-            restoreBaseline([2024, 2025, 2026]);
-            setLiveStatus("Live data unavailable (offline) — showing baseline.", "warn");
-            ConnIndicator.done(false);
+            info.historyLoading = false; info.ok = false; info.settled = false;
+            restoreBaseline(brand, [2024, 2025, 2026]);
+            markBrandLive(brand, false);
+            if (current) {
+              setLiveStatus("Live data unavailable (offline) — showing baseline.", "warn");
+              ConnIndicator.done(false);
+            }
             reRender();
           });
       }
 
       // WINDOWED load for the date-range picker — drives the Live Summary only (LIVE_WIN),
       // never the chart/KPIs. Full mode (includes the Orders API `vou` reconstruction).
-      function loadWindow(start, end) {
+      function loadWindow(brand, start, end) {
+        var info = liveInfo(brand);
+        var current = brand === state.brand;
+        var key = start + "|" + end;
+        info.winLoading = true;
         var years = [];
         for (var y = +start.slice(0, 4); y <= +end.slice(0, 4); y++) years.push(y);
         // Summary tiles read liveState.year — point them at the range's latest year.
-        if (typeof liveState !== "undefined") liveState.year = years[years.length - 1];
-        LIVE_WIN = null; // dashes in the summary while the window is in flight
-        reRender();
-        var qs = "start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end);
+        if (current && typeof liveState !== "undefined") liveState.year = years[years.length - 1];
+        LIVE_WIN[brand] = null; // dashes in the summary while the window is in flight
+        if (current) reRender();
+        var qs = "brand=" + brand + "&start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end);
 
         // Phase 2 (background, non-blocking): the Voucher metric has no ShopifyQL column,
         // so it needs the full Orders-API pull — and paging thousands of orders is the slow
@@ -7548,14 +7635,14 @@
           .then(function (payload) {
             var win = payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
             if (win && win.vou) {
-              BRANDS.SG.vou = BRANDS.SG.vou || {};
+              BRANDS[brand].vou = BRANDS[brand].vou || {};
               Object.keys(win.vou).forEach(function (yr) {
                 var arr = Array(12).fill(null);
                 (win.vou[yr] || []).forEach(function (v, i) { if (v != null) arr[i] = v; });
-                BRANDS.SG.vou[yr] = arr;
+                BRANDS[brand].vou[yr] = arr;
               });
               rebuildAggs();
-              reRender();
+              if (brand === state.brand) reRender();
             }
           })
           .catch(function () {});
@@ -7565,11 +7652,16 @@
         // waiting on the full Orders pull that Phase 2 handles in the background.
         return fetchJSON("/api/dashboard?light=1&" + qs)
           .then(function (payload) {
-            LIVE_WIN =
+            info.winLoading = false; info.winRange = key;
+            LIVE_WIN[brand] =
               payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
-            reRender();
+            if (brand === state.brand) reRender();
           })
-          .catch(function () { LIVE_WIN = null; reRender(); });
+          .catch(function () {
+            info.winLoading = false; info.winRange = key;
+            LIVE_WIN[brand] = null;
+            if (brand === state.brand) reRender();
+          });
       }
 
       // Render baseline shell first, then load live data for the default window.
@@ -7610,8 +7702,8 @@
           else if (v.length > 2) v = v.slice(0, 2) + "/" + v.slice(2);
           el.value = v;
         };
-        // Last committed ISO values, so an invalid manual edit can be reverted.
-        var curStart = null, curEnd = null;
+        // Note: curStart/curEnd are the GLOBAL picker window (declared with the live-overlay
+        // state), so ensureLive() can read the current range when switching brands.
 
         // Resolve a named preset to a [start, end] pair.
         function rangeFor(preset) {
@@ -7627,12 +7719,18 @@
             b.classList.toggle("on", b.dataset.preset === preset);
           });
         }
-        function apply(start, end, preset) {
+        // Reflect a range in the picker UI (inputs + preset highlight) without fetching.
+        function showRange(start, end, preset) {
           curStart = start; curEnd = end;
           if (startEl) { startEl.value = toDMY(start); startEl.classList.remove("invalid"); }
           if (endEl) { endEl.value = toDMY(end); endEl.classList.remove("invalid"); }
           setActivePreset(preset);
-          loadWindow(start, end);
+        }
+        function apply(start, end, preset) {
+          showRange(start, end, preset);
+          // The Live Summary window only applies to an individual live store; roll-ups and
+          // baseline-only brands read full history, so there's nothing to fetch for them.
+          if (isLiveBrand(state.brand)) loadWindow(state.brand, start, end);
         }
         // Editing a date by hand clears the active preset highlight. Values are typed as
         // DD/MM/YYYY; if either field can't be parsed we flag it and revert to the last
@@ -7650,7 +7748,7 @@
           if (startEl) startEl.value = toDMY(s);
           if (endEl) endEl.value = toDMY(e);
           setActivePreset(null);
-          loadWindow(s, e);
+          if (isLiveBrand(state.brand)) loadWindow(state.brand, s, e);
         }
         if (startEl) {
           startEl.addEventListener("input", function () { autoSlash(startEl); });
@@ -7669,12 +7767,14 @@
           });
         }
 
-        // Load full 2024–2026 history once (drives the chart + KPIs), then apply the
-        // default picker window (drives the Live Summary). The chart never goes blank
-        // when the picker is narrowed, because it reads the persisted history.
-        loadHistory();
-        var def = rangeFor("ytd"); // default Live Summary window: year to date
-        apply(def[0], def[1], "ytd");
+        // Set the default picker window (year to date) in the UI, then load SG live:
+        // ensureLive() pulls SG's full 2024–2026 history (drives the chart + KPIs) plus the
+        // default window (drives the Live Summary). The chart never goes blank when the
+        // picker is narrowed, because it reads the persisted history. Other brands load
+        // lazily when first selected (see onBrandSelect).
+        var def = rangeFor("ytd");
+        showRange(def[0], def[1], "ytd");
+        ensureLive("SG");
       })();
     </script>
   </body>

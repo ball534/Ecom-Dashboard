@@ -19,15 +19,32 @@ export class ShopifyError extends Error {
   }
 }
 
-// Read + sanitize config from the environment.
-export function getConfig(env = process.env) {
+// Read + sanitize config from the environment, for a given brand/store.
+//
+// Multi-store: each brand button on the dashboard is backed by its own Shopify store,
+// so it needs its own Admin API token + permanent domain. To add a store live you set,
+// in Vercel, a pair of env vars named after the brand key:
+//   SHOPIFY_TOKEN_<BRAND>   (e.g. SHOPIFY_TOKEN_MY, SHOPIFY_TOKEN_TRTSG)
+//   SHOPIFY_DOMAIN_<BRAND>  (e.g. SHOPIFY_DOMAIN_MY  = iora-my.myshopify.com)
+// SG keeps the original unsuffixed names (SHOPIFY_TOKEN / SHOPIFY_STORE_DOMAIN) so
+// nothing about the existing deployment changes. API version is shared unless a brand
+// overrides it with SHOPIFY_API_VERSION_<BRAND>.
+export function getConfig(env = process.env, brand = "SG") {
   const strip = (s) => (s || "").trim().replace(/^['"]|['"]$/g, "");
-  const token = strip(env.SHOPIFY_TOKEN) || strip(env.SHOPIFY_KEY); // fall back to original .env key name
-  let domain = strip(env.SHOPIFY_STORE_DOMAIN)
-    .replace(/^https?:\/\//, "")
-    .replace(/\/.*$/, "");
-  const version = strip(env.SHOPIFY_API_VERSION) || DEFAULT_API_VERSION;
-  return { token, domain, version };
+  const B = String(brand || "SG").toUpperCase();
+  let token, domain;
+  if (B === "SG") {
+    token = strip(env.SHOPIFY_TOKEN) || strip(env.SHOPIFY_KEY); // original .env key name
+    domain = strip(env.SHOPIFY_STORE_DOMAIN);
+  } else {
+    token = strip(env["SHOPIFY_TOKEN_" + B]);
+    // accept either SHOPIFY_DOMAIN_<B> or SHOPIFY_STORE_DOMAIN_<B>
+    domain = strip(env["SHOPIFY_DOMAIN_" + B]) || strip(env["SHOPIFY_STORE_DOMAIN_" + B]);
+  }
+  domain = domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  const version =
+    strip(env["SHOPIFY_API_VERSION_" + B]) || strip(env.SHOPIFY_API_VERSION) || DEFAULT_API_VERSION;
+  return { token, domain, version, brand: B };
 }
 
 export async function shopifyGraphQL(cfg, query, variables = {}) {

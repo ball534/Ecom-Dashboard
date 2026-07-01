@@ -43,6 +43,17 @@ function emptyMetrics(years) {
 const SHOP_TZ = "Asia/Singapore";
 const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
+// Individual stores the dashboard can request live (one Shopify store each). The
+// front-end's roll-up brands (SGALL/MYALL/GROUP) are computed client-side from these,
+// so they never hit this endpoint directly. Unknown/absent brand -> SG.
+const LIVE_BRANDS = new Set([
+  "SG", "MY", "TRTSG", "TRTMY", "SANSSG", "SANSMY", "MONOSG", "MONOMY",
+]);
+function resolveBrand(q) {
+  const b = String(q.brand || "SG").toUpperCase();
+  return LIVE_BRANDS.has(b) ? b : "SG";
+}
+
 // "Today" as YYYY-MM-DD in the shop's timezone (en-CA formats as ISO date).
 function todayInTZ(tz) {
   return new Intl.DateTimeFormat("en-CA", {
@@ -54,9 +65,28 @@ function todayInTZ(tz) {
 }
 
 export default async function handler(req, res) {
-  const cfg = getConfig();
   const today = todayInTZ(SHOP_TZ);
   const q = req.query || {};
+  const brand = resolveBrand(q);
+  const cfg = getConfig(process.env, brand);
+
+  // A brand with no token/domain configured isn't an error — it just isn't wired up yet.
+  // Report it plainly so the front-end keeps that brand on its baseline data instead of
+  // showing a scary failure. (SG is always configured on this deployment.)
+  if (!cfg.token || !cfg.domain || cfg.domain === "your-store.myshopify.com") {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({
+      SG: {},
+      meta: {
+        live: false,
+        brand,
+        reason: "not-configured",
+        message:
+          `No Shopify credentials configured for brand "${brand}". Set SHOPIFY_TOKEN_${brand} ` +
+          `and SHOPIFY_DOMAIN_${brand} in the Vercel project's Environment Variables.`,
+      },
+    });
+  }
 
   // Resolve + sanitize the requested window. Default: this calendar year to date.
   let start = isDate(q.start) ? q.start : `${today.slice(0, 4)}-01-01`;
@@ -177,6 +207,7 @@ export default async function handler(req, res) {
       SG: metrics,
       meta: {
         live: true,
+        brand,
         asOf: new Date().toISOString(),
         range: { start, end },
         years,
