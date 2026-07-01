@@ -142,6 +142,29 @@ export default async function handler(req, res) {
       if (!shopifyqlError) shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
     }
 
+    // Did we actually obtain any live figures? In `light` mode nothing pages the
+    // Orders API, so the outer try can't throw even when the token/domain are missing
+    // or ShopifyQL is denied — every metric would just stay null. Reporting live:true
+    // in that case makes the front-end show a green "Connected" over a wall of dashes.
+    // Only claim `live` when real data came back, so the UI shows the failure reason.
+    const gotLiveData =
+      salesSource === "shopifyql" || sessionsLive || (!light && result.orders.length > 0);
+    if (!gotLiveData) {
+      res.setHeader("Cache-Control", "no-store");
+      return res.status(200).json({
+        SG: {},
+        meta: {
+          live: false,
+          reason: shopifyqlError || "no-data",
+          message:
+            "The API responded but returned no live figures. On Vercel this usually means " +
+            "SHOPIFY_TOKEN / SHOPIFY_STORE_DOMAIN are not set in the project's Environment Variables.",
+          salesSource,
+          sessionsLive,
+        },
+      });
+    }
+
     res.setHeader("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600");
     return res.status(200).json({
       SG: metrics,
