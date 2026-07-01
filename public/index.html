@@ -2099,26 +2099,36 @@
         }
       }
       function renderLive() {
-        // The Live Summary reflects the date-range picker (a windowed fetch stored in
-        // LIVE_WIN), while the chart/KPIs read full history from B(). When no window has
-        // loaded yet (or for non-SG brands) fall back to B() so tiles still render.
-        const LD = LIVE_WIN[state.brand] ? LIVE_WIN[state.brand] : B();
+        // The Live Summary shows the picker's window for the current year and compares it
+        // to the SAME calendar months a year earlier (the ▲/▼ arrows). The window fetch
+        // (LIVE_WIN) only covers the selected range's year, so it has no prior-year baseline
+        // on its own — we take the current-year figures from the window but the prior-year
+        // figures from full history (B(), which the chart/KPIs already load for all years).
+        // Roll-up/baseline brands have no window, so everything comes from full history.
+        const hist = B();
+        const winData = LIVE_WIN[state.brand];
         const yr = liveState.year,
           prev = yr - 1;
-        const lead = (arr) => {
-          arr = arr || [];
-          let last = -1;
-          arr.forEach((v, i) => {
-            if (v != null) last = i;
-          });
-          return last < 0 ? 12 : last + 1;
-        };
-        const n = Math.max(1, lead(LD.rev[yr]));
-        const full = n >= 12,
-          wlab = full ? "Full Year" : "Jan–" + MONTHS[n - 1];
+        const LD = {};
+        LIVE_METRICS.forEach((m) => {
+          const src = {};
+          const hm = hist[m] || {};
+          Object.keys(hm).forEach((y) => { src[y] = hm[y]; });
+          // Override the summary year with the live window when one is loaded.
+          if (winData && winData[m] && winData[m][yr]) src[yr] = winData[m][yr];
+          LD[m] = src;
+        });
+        // The months that actually have data in the current window define the comparison
+        // period: we sum exactly those calendar months in BOTH years, so a MTD/30d/90d
+        // window is compared against the same months last year (not a Jan-to-date slice).
+        const active = [];
+        (LD.rev[yr] || []).forEach((v, i) => { if (v != null) active.push(i); });
+        if (!active.length) for (let i = 0; i < 12; i++) active.push(i);
         const win = (arr) => {
-          const s = (arr || []).slice(0, n).filter((v) => v != null);
-          return s.length ? sum(s) : null;
+          if (!arr) return null;
+          let any = false, t = 0;
+          active.forEach((i) => { if (arr[i] != null) { t += arr[i]; any = true; } });
+          return any ? t : null;
         };
         const add = (a, b) =>
           a == null && b == null ? null : (a || 0) + (b || 0);
