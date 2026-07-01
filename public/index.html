@@ -7621,10 +7621,12 @@
         info.winLoading = true;
         var years = [];
         for (var y = +start.slice(0, 4); y <= +end.slice(0, 4); y++) years.push(y);
-        // Summary tiles read liveState.year — point them at the range's latest year.
-        if (current && typeof liveState !== "undefined") liveState.year = years[years.length - 1];
-        LIVE_WIN[brand] = null; // dashes in the summary while the window is in flight
-        if (current) reRender();
+        // NB: we intentionally do NOT blank LIVE_WIN[brand] here. Blanking made the Live
+        // Summary fall back to full-history numbers (and their year-over-year chips) for the
+        // few hundred ms until the new window landed — so a comparison arrow would flash in
+        // and then change. Instead we keep the current values until the new window arrives
+        // and swap them in with a single re-render below. liveState.year is likewise updated
+        // only when the new data is applied, so it always matches what's on screen.
         var qs = "brand=" + brand + "&start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end);
 
         // Phase 2 (background, non-blocking): the Voucher metric has no ShopifyQL column,
@@ -7655,10 +7657,17 @@
             info.winLoading = false; info.winRange = key;
             LIVE_WIN[brand] =
               payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
+            // Point the summary's comparison year at the new window's latest year, together
+            // with the new data, so the year-over-year arrows are computed against the right
+            // baseline and update in one render (no flashing).
+            if (current && typeof liveState !== "undefined") {
+              liveState.year = years[years.length - 1];
+            }
             if (brand === state.brand) reRender();
           })
           .catch(function () {
             info.winLoading = false; info.winRange = key;
+            // On a genuine fetch failure, fall back to full history for this brand.
             LIVE_WIN[brand] = null;
             if (brand === state.brand) reRender();
           });
