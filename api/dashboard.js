@@ -104,6 +104,7 @@ export default async function handler(req, res) {
     let salesSource = "reconstructed";
     let sessionsLive = false;
     let shopifyqlError = null;
+    let shopifyqlMessage = null;
 
     try {
       const { rows } = await shopifyQL(cfg, buildSalesQL(start, end));
@@ -121,6 +122,7 @@ export default async function handler(req, res) {
       salesSource = "shopifyql";
     } catch (e) {
       shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
+      shopifyqlMessage = String(e?.message || e).slice(0, 400);
     }
 
     try {
@@ -156,9 +158,14 @@ export default async function handler(req, res) {
         meta: {
           live: false,
           reason: shopifyqlError || "no-data",
+          // The raw Shopify error + the API version actually in use, so the failure is
+          // diagnosable from the browser (e.g. an old apiVersion means shopifyqlQuery
+          // doesn't exist and every dataset comes back with a "graphql" error).
           message:
+            shopifyqlMessage ||
             "The API responded but returned no live figures. On Vercel this usually means " +
-            "SHOPIFY_TOKEN / SHOPIFY_STORE_DOMAIN are not set in the project's Environment Variables.",
+              "SHOPIFY_TOKEN / SHOPIFY_STORE_DOMAIN are not set in the project's Environment Variables.",
+          apiVersion: cfg.version,
           salesSource,
           sessionsLive,
         },
