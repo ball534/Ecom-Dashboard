@@ -227,7 +227,7 @@
         font-weight: 600;
         letter-spacing: 0.02em;
       }
-      .daterange input[type="date"] {
+      .daterange input.dr-date {
         font: inherit;
         font-size: 12.5px;
         color: var(--ink, inherit);
@@ -235,7 +235,13 @@
         border: 1px solid var(--line, #ccc);
         border-radius: 7px;
         padding: 4px 8px;
-        cursor: pointer;
+        width: 104px;
+        text-align: center;
+        letter-spacing: 0.02em;
+      }
+      .daterange input.dr-date.invalid {
+        border-color: #c0392b;
+        color: #c0392b;
       }
       .dr-presets {
         display: inline-flex;
@@ -845,9 +851,9 @@
           <div class="daterange">
             <div class="dr-inputs">
               <label for="liveStart">From</label>
-              <input type="date" id="liveStart" lang="en-GB" />
+              <input type="text" id="liveStart" class="dr-date" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off" />
               <label for="liveEnd">To</label>
-              <input type="date" id="liveEnd" lang="en-GB" />
+              <input type="text" id="liveEnd" class="dr-date" inputmode="numeric" placeholder="DD/MM/YYYY" maxlength="10" autocomplete="off" />
             </div>
             <div class="dr-presets" id="datePresets">
               <button type="button" data-preset="mtd">This month</button>
@@ -7532,22 +7538,35 @@
         if (typeof liveState !== "undefined") liveState.year = years[years.length - 1];
         LIVE_WIN = null; // dashes in the summary while the window is in flight
         reRender();
-        return fetchJSON("/api/dashboard?start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end))
+        var qs = "start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end);
+
+        // Phase 2 (background, non-blocking): the Voucher metric has no ShopifyQL column,
+        // so it needs the full Orders-API pull — and paging thousands of orders is the slow
+        // part of a windowed load. We DON'T make the summary wait on it; fire it off and
+        // merge `vou` into the Voucher KPI whenever it lands.
+        fetchJSON("/api/dashboard?" + qs)
           .then(function (payload) {
-            LIVE_WIN =
-              payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
-            // `vou` has no ShopifyQL column, so it is absent from the light history load.
-            // Merge it from this full window fetch so the Voucher KPI still populates for
-            // the selected window's year (other metrics stay on full history).
-            if (LIVE_WIN && LIVE_WIN.vou) {
+            var win = payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
+            if (win && win.vou) {
               BRANDS.SG.vou = BRANDS.SG.vou || {};
-              Object.keys(LIVE_WIN.vou).forEach(function (yr) {
+              Object.keys(win.vou).forEach(function (yr) {
                 var arr = Array(12).fill(null);
-                (LIVE_WIN.vou[yr] || []).forEach(function (v, i) { if (v != null) arr[i] = v; });
+                (win.vou[yr] || []).forEach(function (v, i) { if (v != null) arr[i] = v; });
                 BRANDS.SG.vou[yr] = arr;
               });
               rebuildAggs();
+              reRender();
             }
+          })
+          .catch(function () {});
+
+        // Phase 1 (fast): ShopifyQL-only `light` fetch drives the Live Summary immediately.
+        // No order pagination, so changing the date range feels near-instant instead of
+        // waiting on the full Orders pull that Phase 2 handles in the background.
+        return fetchJSON("/api/dashboard?light=1&" + qs)
+          .then(function (payload) {
+            LIVE_WIN =
+              payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
             reRender();
           })
           .catch(function () { LIVE_WIN = null; reRender(); });
@@ -7566,6 +7585,34 @@
         var today = new Date();
         var todayStr = fmt(today);
 
+        // The inputs display DD/MM/YYYY; the API + internal state use ISO YYYY-MM-DD.
+        // toDMY/fromDMY convert between the two; fromDMY returns "" for anything invalid.
+        var toDMY = function (iso) {
+          if (!iso || iso.length < 10) return "";
+          var p = iso.split("-");
+          return p[2] + "/" + p[1] + "/" + p[0];
+        };
+        var fromDMY = function (s) {
+          var m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec(String(s || "").trim());
+          if (!m) return "";
+          var dd = +m[1], mm = +m[2], yy = +m[3];
+          if (mm < 1 || mm > 12 || dd < 1 || dd > 31) return "";
+          var iso = yy + "-" + pad(mm) + "-" + pad(dd);
+          var d = new Date(iso + "T00:00:00");
+          // Reject impossible dates (e.g. 31/02/2026) — JS would roll them over.
+          if (isNaN(d.getTime()) || d.getDate() !== dd) return "";
+          return iso;
+        };
+        // Insert slashes as the user types digits, so DD/MM/YYYY forms itself.
+        var autoSlash = function (el) {
+          var v = el.value.replace(/[^\d]/g, "").slice(0, 8);
+          if (v.length > 4) v = v.slice(0, 2) + "/" + v.slice(2, 4) + "/" + v.slice(4);
+          else if (v.length > 2) v = v.slice(0, 2) + "/" + v.slice(2);
+          el.value = v;
+        };
+        // Last committed ISO values, so an invalid manual edit can be reverted.
+        var curStart = null, curEnd = null;
+
         // Resolve a named preset to a [start, end] pair.
         function rangeFor(preset) {
           var d;
@@ -7581,21 +7628,38 @@
           });
         }
         function apply(start, end, preset) {
-          if (startEl) { startEl.value = start; startEl.max = todayStr; }
-          if (endEl) { endEl.value = end; endEl.max = todayStr; }
+          curStart = start; curEnd = end;
+          if (startEl) { startEl.value = toDMY(start); startEl.classList.remove("invalid"); }
+          if (endEl) { endEl.value = toDMY(end); endEl.classList.remove("invalid"); }
           setActivePreset(preset);
           loadWindow(start, end);
         }
-        // Editing a date by hand clears the active preset highlight.
+        // Editing a date by hand clears the active preset highlight. Values are typed as
+        // DD/MM/YYYY; if either field can't be parsed we flag it and revert to the last
+        // committed value rather than firing a fetch for a nonsense range.
         function onManual() {
-          var s = startEl && startEl.value ? startEl.value : today.getFullYear() + "-01-01";
-          var e = endEl && endEl.value ? endEl.value : todayStr;
-          if (s > e) { var t = s; s = e; e = t; if (startEl) startEl.value = s; if (endEl) endEl.value = e; }
+          var s = fromDMY(startEl && startEl.value), e = fromDMY(endEl && endEl.value);
+          var ok = true;
+          if (startEl) { startEl.classList.toggle("invalid", !s); if (!s) ok = false; }
+          if (endEl) { endEl.classList.toggle("invalid", !e); if (!e) ok = false; }
+          if (!ok) return;
+          if (s > todayStr) { s = todayStr; }
+          if (e > todayStr) { e = todayStr; }
+          if (s > e) { var t = s; s = e; e = t; }
+          curStart = s; curEnd = e;
+          if (startEl) startEl.value = toDMY(s);
+          if (endEl) endEl.value = toDMY(e);
           setActivePreset(null);
           loadWindow(s, e);
         }
-        if (startEl) startEl.addEventListener("change", onManual);
-        if (endEl) endEl.addEventListener("change", onManual);
+        if (startEl) {
+          startEl.addEventListener("input", function () { autoSlash(startEl); });
+          startEl.addEventListener("change", onManual);
+        }
+        if (endEl) {
+          endEl.addEventListener("input", function () { autoSlash(endEl); });
+          endEl.addEventListener("change", onManual);
+        }
         if (presetWrap) {
           presetWrap.querySelectorAll("button").forEach(function (b) {
             b.addEventListener("click", function () {
