@@ -8254,16 +8254,42 @@
         var current = brand === state.brand;
         info.historyLoading = true;
         snapshotBaseline(brand);
-        blankLive(brand, [2024, 2025, 2026]);
+        // On a retry after a partial payload, live figures are already on screen —
+        // don't blank them back to dashes while the retry is in flight.
+        if (!info.ok) blankLive(brand, [2024, 2025, 2026]);
         if (current) { setLiveStatus("", ""); ConnIndicator.start(); }
         reRender();
         return fetchJSON("/api/dashboard?light=1&brand=" + brand + "&start=2024-01-01&end=" + encodeURIComponent(TODAY_STR))
           .then(function (payload) {
             info.historyLoading = false;
             if (applyLive(brand, payload)) {
-              info.ok = true; info.settled = true;
+              info.ok = true;
               markBrandLive(brand, true);
-              if (current) { setLiveStatus("", "ok"); ConnIndicator.done(true); }
+              // A partial payload means the ShopifyQL sales dataset was throttled, so
+              // Revenue/Orders came back null (dashes). The server never caches
+              // partials, so a short-delay retry gets a fresh attempt at Shopify.
+              var partial = !payload.meta || payload.meta.salesSource !== "shopifyql";
+              if (partial && (info.histRetries || 0) < 2) {
+                info.histRetries = (info.histRetries || 0) + 1;
+                info.settled = false;
+                setTimeout(function () {
+                  var i = liveInfo(brand);
+                  if (!i.historyLoading && !i.settled) loadHistory(brand);
+                }, 4000 * info.histRetries);
+              } else {
+                info.settled = true;
+                info.histRetries = 0;
+                if (partial && current) {
+                  setLiveStatus(
+                    "Some live figures couldn't load (Shopify rate limit) — refresh to retry.",
+                    "warn",
+                  );
+                }
+              }
+              if (current) {
+                if (!partial) setLiveStatus("", "ok");
+                ConnIndicator.done(true);
+              }
             } else {
               info.ok = false;
               restoreBaseline(brand, [2024, 2025, 2026]);
@@ -8312,6 +8338,11 @@
         // only when the new data is applied, so it always matches what's on screen.
         var qs = "brand=" + brand + "&start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end);
 
+        // Phases 2 + 3 are deferred ~1.5s so they don't compete with the critical
+        // phase-1 + history fetches for Shopify's rate-limit budget (a simultaneous
+        // burst is what throttles the sales dataset into dashes).
+        setTimeout(function () {
+
         // Phase 2 (background, non-blocking): the Voucher metric has no ShopifyQL column,
         // so it needs the full Orders-API pull — and paging thousands of orders is the slow
         // part of a windowed load. We DON'T make the summary wait on it; fire it off and
@@ -8348,29 +8379,56 @@
           })
           .catch(function () {});
 
+        }, 1500); // end deferred phases 2 + 3
+
+        // Applies a phase-1 payload to the Live Summary. Factored out so the
+        // partial-payload retry below can re-apply a completed fetch in place.
+        var applyWin = function (payload) {
+          info.winLoading = false; info.winRange = key;
+          LIVE_WIN[brand] =
+            payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
+          // A failed window fetch would otherwise silently show full-history
+          // figures under the new range's wording — say so instead.
+          if (!LIVE_WIN[brand] && brand === state.brand && payload && payload.meta && payload.meta.reason) {
+            setLiveStatus(
+              "Selected range unavailable (" + payload.meta.reason + ") — summary shows full-year figures.",
+              "warn",
+            );
+          }
+          // Point the summary's comparison year at the new window's latest year, together
+          // with the new data, so the year-over-year arrows are computed against the right
+          // baseline and update in one render (no flashing).
+          if (current && typeof liveState !== "undefined") {
+            liveState.year = years[years.length - 1];
+          }
+          if (brand === state.brand) reRender();
+        };
+
         // Phase 1 (fast): ShopifyQL-only `light` fetch drives the Live Summary immediately.
         // No order pagination, so changing the date range feels near-instant instead of
         // waiting on the full Orders pull that Phase 2 handles in the background.
         return fetchJSON("/api/dashboard?light=1&" + qs)
           .then(function (payload) {
-            info.winLoading = false; info.winRange = key;
-            LIVE_WIN[brand] =
-              payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
-            // A failed window fetch would otherwise silently show full-history
-            // figures under the new range's wording — say so instead.
-            if (!LIVE_WIN[brand] && brand === state.brand && payload && payload.meta && payload.meta.reason) {
-              setLiveStatus(
-                "Selected range unavailable (" + payload.meta.reason + ") — summary shows full-year figures.",
-                "warn",
-              );
+            applyWin(payload);
+            // Partial payload: the sales dataset was throttled, so Revenue/Orders in the
+            // summary would sit on dashes. The server never caches partials, so one
+            // delayed re-fetch usually completes them; only a full payload is re-applied.
+            var partial =
+              payload && payload.meta && payload.meta.live &&
+              payload.meta.salesSource !== "shopifyql";
+            if (partial) {
+              setTimeout(function () {
+                if (curStart !== start || curEnd !== end || info.winLoading) return;
+                fetchJSON("/api/dashboard?light=1&" + qs)
+                  .then(function (p2) {
+                    if (curStart !== start || curEnd !== end || info.winLoading) return;
+                    if (p2 && p2.meta && p2.meta.live && p2.meta.salesSource === "shopifyql") {
+                      applyWin(p2);
+                    }
+                  })
+                  .catch(function () {});
+              }, 4000);
             }
-            // Point the summary's comparison year at the new window's latest year, together
-            // with the new data, so the year-over-year arrows are computed against the right
-            // baseline and update in one render (no flashing).
-            if (current && typeof liveState !== "undefined") {
-              liveState.year = years[years.length - 1];
-            }
-            if (brand === state.brand) reRender();
           })
           .catch(function () {
             info.winLoading = false; info.winRange = key;

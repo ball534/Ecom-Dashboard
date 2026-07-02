@@ -56,6 +56,27 @@ const failInfo = (e) => ({
   message: String(e?.message || e).slice(0, 400),
 });
 
+// Run thunks with limited concurrency, returning Promise.allSettled-shaped results.
+// Firing all six insight queries at once can trip Shopify's cost throttle — and take
+// down /api/dashboard's sales query (fetched by the front-end at the same moment),
+// which is what blanks Sales Revenue / Order Count to dashes.
+async function settledPool(thunks, width) {
+  const results = new Array(thunks.length);
+  let next = 0;
+  async function worker() {
+    while (next < thunks.length) {
+      const i = next++;
+      try {
+        results[i] = { status: "fulfilled", value: await thunks[i]() };
+      } catch (e) {
+        results[i] = { status: "rejected", reason: e };
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(width, thunks.length) }, worker));
+  return results;
+}
+
 export default async function handler(req, res) {
   const today = todayInTZ(SHOP_TZ);
   const q = req.query || {};
@@ -107,8 +128,9 @@ export default async function handler(req, res) {
   }
 
   try {
-    const results = await Promise.allSettled(
-      INSIGHT_QUERIES.map((spec) => shopifyQL(cfg, spec.build(start, end, limit))),
+    const results = await settledPool(
+      INSIGHT_QUERIES.map((spec) => () => shopifyQL(cfg, spec.build(start, end, limit))),
+      2,
     );
     const rowsByKey = {};
     INSIGHT_QUERIES.forEach((spec, i) => {
@@ -169,9 +191,14 @@ export default async function handler(req, res) {
       });
     }
 
-    // A partially failed payload is still cached — the per-section errors are honest
-    // and refresh within 15 minutes.
-    res.setHeader("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600");
+    // Only a fully successful payload is edge-cached, and briefly (5 min): caching a
+    // partially throttled one would pin its missing sections on every visitor until
+    // the cache expired.
+    const allOk = results.every((r) => r.status === "fulfilled");
+    res.setHeader(
+      "Cache-Control",
+      allOk ? "public, s-maxage=300, stale-while-revalidate=600" : "no-store",
+    );
     return res.status(200).json({ sections, meta });
   } catch (e) {
     const reason = e instanceof ShopifyError ? e.reason : "error";

@@ -202,11 +202,20 @@ export default async function handler(req, res) {
       });
     }
 
-    res.setHeader("Cache-Control", "public, s-maxage=900, stale-while-revalidate=3600");
+    // Only a COMPLETE payload is edge-cached, and briefly (5 min) so the numbers stay
+    // close to live. A partial one — e.g. the sales dataset throttled while sessions
+    // landed — must never be cached: it would pin dashes on Sales Revenue / Order
+    // Count for every visitor until the cache expired.
+    const partial = salesSource !== "shopifyql" || !sessionsLive;
+    res.setHeader(
+      "Cache-Control",
+      partial ? "no-store" : "public, s-maxage=300, stale-while-revalidate=600",
+    );
     return res.status(200).json({
       SG: metrics,
       meta: {
         live: true,
+        partial,
         brand,
         asOf: new Date().toISOString(),
         range: { start, end },
