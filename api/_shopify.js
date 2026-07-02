@@ -47,7 +47,14 @@ export function getConfig(env = process.env, brand = "SG") {
   return { token, domain, version, brand: B };
 }
 
-export async function shopifyGraphQL(cfg, query, variables = {}) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Bursts of concurrent calls (several dashboard windows + the insights fan-out)
+// can hit Shopify's GraphQL cost throttle. The bucket restores within a second
+// or two, so a short backoff-and-retry absorbs it instead of failing the section.
+const THROTTLE_RETRIES = 2;
+
+export async function shopifyGraphQL(cfg, query, variables = {}, _attempt = 0) {
   if (!cfg.domain || cfg.domain === "your-store.myshopify.com") {
     throw new ShopifyError("no-domain", "SHOPIFY_STORE_DOMAIN is not set");
   }
@@ -74,6 +81,10 @@ export async function shopifyGraphQL(cfg, query, variables = {}) {
     throw new ShopifyError("auth", `Shopify rejected the token (HTTP ${res.status}). The token may be invalid or not a Shopify Admin token.`, res.status);
   }
   if (res.status === 429) {
+    if (_attempt < THROTTLE_RETRIES) {
+      await sleep(1200 * (_attempt + 1));
+      return shopifyGraphQL(cfg, query, variables, _attempt + 1);
+    }
     throw new ShopifyError("throttle", "Shopify rate limit hit (HTTP 429).", 429);
   }
   if (!res.ok) {
@@ -84,6 +95,14 @@ export async function shopifyGraphQL(cfg, query, variables = {}) {
   const json = await res.json();
   if (json.errors) {
     const msg = JSON.stringify(json.errors);
+    // Cost-throttling surfaces as a GraphQL error (code THROTTLED), not HTTP 429.
+    if (/THROTTLED|rate limited/i.test(msg)) {
+      if (_attempt < THROTTLE_RETRIES) {
+        await sleep(1200 * (_attempt + 1));
+        return shopifyGraphQL(cfg, query, variables, _attempt + 1);
+      }
+      throw new ShopifyError("throttle", msg);
+    }
     // Distinguish "needs a scope / protected-data approval" from generic GraphQL errors.
     const reason = /access denied|not approved|read_all_orders|protected customer|requires merchant approval/i.test(msg)
       ? "scope"

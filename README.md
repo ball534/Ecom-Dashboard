@@ -36,11 +36,42 @@ A small status note in the header surfaces only problems (e.g. "Live data unavai
 | Live now (iORA SG, current year) | Coming soon (badged) |
 |---|---|
 | Revenue, Orders, Units, Discounts | Channel Mix (Shopee/Lazada/TikTok) |
-| **Sessions, Conversion** (ShopifyQL) | Sales Targets, Sale vs Full-price |
-| Voucher orders, New vs Returning customers | Traffic sources / Funnel (needs session breakdowns) |
-| Live Summary tiles + Key Metrics | Best Sellers / Category (product pull) |
-| | 2024–2025 history (needs `read_all_orders`) |
-| | The other 7 brands |
+| **Sessions, Conversion** (ShopifyQL) | Sale vs Full-price |
+| Voucher orders, New vs Returning customers | Marketing funnel steps (cart/checkout breakdowns) |
+| At-a-Glance hero + Key Numbers | Ads spend / ROAS (needs ad-platform APIs) |
+| **Best Sellers (SKU + product), Category Mix** | The other 7 brands |
+| **Discount-code performance, Traffic attribution** | |
+| Sales Targets (from `lib/targets.js`, once filled in) | |
+
+### UI: tabs + At-a-Glance (2026-07 redesign)
+
+The page opens with an **At a Glance** hero — headline tiles with like-for-like
+year-on-year chips (same calendar months, both years) and **auto-written insight
+bullets** (sales headline, pace vs target, biggest YoY mover, top discount code,
+best seller, traffic anomalies). Below it, panels are organised into tabs:
+**Overview · Sales · Marketing · Products · Customers**. KPI chips use the same
+like-for-like YoY rule as the hero, so the two always agree. Dense tables are
+folded behind "Show table" toggles; the charts stay visible.
+
+### `/api/insights` — the insight sections
+
+`GET /api/insights?brand=SG&start=YYYY-MM-DD&end=YYYY-MM-DD&limit=10` returns, in
+one round trip: best sellers (by SKU + by product title), discount-code
+performance, category mix, traffic attribution (referrers, order sources, UTM
+campaigns) and sales targets. All six ShopifyQL calls run in parallel
+(`Promise.allSettled`); a failed section returns `null` with a reason in
+`meta.sections.<key>` — the payload never 500s. See `lib/insights.js` (pure
+builders/parsers, unit-tested) and `api/insights.js`.
+
+**Two files the team maintains by hand** (validated by `npm test`):
+
+- **`lib/category-map.js`** — SKU prefix → category (Shopify `product_type` is
+  mostly blank on this store; SKU chars 3–4 encode the category, e.g. `AFBS` =
+  blouse). Run `npm run preview-insights` to see the top **unmapped** prefixes
+  ranked by gross sales, then add them here.
+- **`lib/targets.js`** — monthly sales targets per brand/year (`{year: [12]}`,
+  null = no target). Feeds the Sales tab's Target vs Actual panel and the
+  "tracking ahead/behind target" insight bullet.
 
 ## ✅ Token status (as of 2026-06-18)
 

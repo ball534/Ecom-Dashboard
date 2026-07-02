@@ -823,10 +823,242 @@
       .conn.settled .conn-track {
         display: none;
       }
+
+      /* ---- Redesign: tab bar, At-a-Glance hero, tooltips, table folds ---- */
+      .tabbar {
+        position: sticky;
+        top: 0;
+        z-index: 20;
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        justify-content: space-between;
+        gap: 2px 18px;
+        margin: 0 0 22px;
+        background: var(--paper);
+        border-bottom: 1.5px solid var(--ink);
+      }
+      .tabbar-tabs {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 2px;
+      }
+      .tabbar-status {
+        display: flex;
+        align-items: center;
+        margin-bottom: 6px;
+      }
+      /* Live status/connection indicator lives in the tab bar's right slot -> reset
+         the margin it used when it hung under the header meta block. */
+      .tabbar-status .conn {
+        margin-top: 0;
+      }
+      .tabbar-status #liveStatus {
+        margin-left: 0;
+      }
+      .tabbar button {
+        appearance: none;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+        font-family: "Archivo", sans-serif;
+        font-size: 12.5px;
+        font-weight: 700;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        color: var(--muted);
+        padding: 12px 18px 10px;
+        border-bottom: 3px solid transparent;
+        margin-bottom: -1.5px;
+        transition: color 0.15s ease;
+      }
+      .tabbar button:hover {
+        color: var(--ink);
+      }
+      .tabbar button.on {
+        color: var(--accent);
+        border-bottom-color: var(--accent);
+      }
+      .tabbar button:disabled {
+        opacity: 0.3;
+        pointer-events: none;
+      }
+      .hero-grid {
+        display: grid;
+        grid-template-columns: 1fr 330px;
+        gap: 20px;
+        margin-top: 10px;
+        align-items: start;
+      }
+      @media (max-width: 980px) {
+        .hero-grid {
+          grid-template-columns: 1fr;
+        }
+      }
+      .hero-tiles {
+        grid-template-columns: repeat(3, 1fr);
+        margin-top: 0;
+      }
+      @media (max-width: 560px) {
+        .hero-tiles {
+          grid-template-columns: repeat(2, 1fr);
+        }
+      }
+      .hero-tiles .tile .tv {
+        font-size: clamp(24px, 3vw, 32px);
+      }
+      .insights {
+        background: var(--surface);
+        border: 1px solid var(--line);
+        border-radius: 13px;
+        padding: 15px 16px;
+      }
+      .insights .ins-title {
+        font-size: 10.5px;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 600;
+        margin-bottom: 9px;
+      }
+      .insights ul {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+      }
+      .insights li {
+        position: relative;
+        padding: 0 0 10px 18px;
+        font-size: 13.5px;
+        line-height: 1.55;
+      }
+      .insights li::before {
+        content: "";
+        position: absolute;
+        left: 0;
+        top: 7px;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: var(--taupe);
+      }
+      .insights li.good::before {
+        background: var(--green);
+      }
+      .insights li.bad::before {
+        background: var(--red);
+      }
+      .more-tiles {
+        margin-top: 14px;
+      }
+      .more-tiles summary {
+        cursor: pointer;
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 600;
+        user-select: none;
+      }
+      .more-tiles summary:hover {
+        color: var(--ink);
+      }
+      .more-tiles[open] summary {
+        margin-bottom: 8px;
+      }
+      .tip {
+        border-bottom: 1px dotted var(--taupe);
+        cursor: help;
+        position: relative;
+      }
+      .tip:hover::after {
+        content: attr(data-tip);
+        position: absolute;
+        bottom: 130%;
+        left: 50%;
+        transform: translateX(-50%);
+        width: max-content;
+        max-width: 260px;
+        background: var(--ink);
+        color: var(--paper);
+        font-size: 12px;
+        font-weight: 400;
+        line-height: 1.5;
+        letter-spacing: normal;
+        text-transform: none;
+        padding: 8px 11px;
+        border-radius: 8px;
+        z-index: 40;
+        white-space: normal;
+        text-align: left;
+      }
+      .tip:hover::before {
+        content: "";
+        position: absolute;
+        bottom: calc(130% - 9px);
+        left: 50%;
+        transform: translateX(-50%);
+        border: 5px solid transparent;
+        border-top-color: var(--ink);
+        z-index: 40;
+      }
+      .tbl-fold {
+        margin-top: 12px;
+      }
+      .tbl-fold > summary {
+        cursor: pointer;
+        display: inline-block;
+        font-size: 11px;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: var(--muted);
+        font-weight: 600;
+        padding: 7px 12px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        background: var(--surface);
+        user-select: none;
+      }
+      .tbl-fold > summary:hover {
+        color: var(--ink);
+        border-color: var(--taupe);
+      }
+      .tbl-fold[open] > summary {
+        margin-bottom: 6px;
+      }
+      .attrib-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        gap: 20px;
+        margin-top: 10px;
+        align-items: start;
+      }
+      .attrib-grid table {
+        min-width: 0;
+      }
+      #deepDive {
+        color: var(--accent);
+        font-weight: 600;
+        cursor: pointer;
+        text-decoration: none;
+      }
+      #deepDive:hover {
+        text-decoration: underline;
+      }
     </style>
   </head>
   <body>
     <div class="wrap">
+      <nav class="tabbar" id="tabBar">
+        <div class="tabbar-tabs">
+          <button data-tab="overview" class="on">Overview</button>
+          <button data-tab="sales">Sales</button>
+          <button data-tab="marketing">Marketing</button>
+          <button data-tab="products">Products</button>
+          <button data-tab="customers">Customers</button>
+        </div>
+        <div class="tabbar-status" id="tabBarStatus"></div>
+      </nav>
       <header>
         <div class="brand">
           <div class="seg brandseg" id="brandSeg" style="flex-wrap: wrap">
@@ -864,31 +1096,46 @@
           </div>
         </div>
       </header>
-      <section class="panel feature">
+      <section class="panel feature" id="glancePanel">
         <div class="panel-head">
           <div>
+            <span class="eyebrow" style="display: block; margin-bottom: 5px"
+              >At a glance</span
+            >
             <h2 id="liveTitle">Live Summary</h2>
+            <div class="desc" id="glanceWindow"></div>
           </div>
         </div>
-        <div class="tiles" id="liveTiles"></div>
-        <div class="legend-note" id="liveFoot"></div>
+        <div class="hero-grid">
+          <div>
+            <div class="tiles hero-tiles" id="liveTiles"></div>
+            <details class="more-tiles">
+              <summary>More numbers ▾</summary>
+              <div class="tiles" id="liveTiles2"></div>
+            </details>
+          </div>
+          <div class="insights">
+            <div class="ins-title">What’s happening</div>
+            <ul id="insightList"></ul>
+          </div>
+        </div>
       </section>
-      <div class="panel-head" style="margin: 4px 0 14px">
+      <div class="panel-head" style="margin: 4px 0 14px" id="kpiHead">
         <div>
           <span class="eyebrow" style="display: block; margin-bottom: 5px"
             >Performance Overview</span
           >
-          <h2>Key Metrics — Year to Date (Live)</h2>
+          <h2 id="kpiHeadTitle">Key Numbers — this year so far</h2>
           <div class="desc">
-            Headline KPIs for iORA SG, pulled live from the Shopify API for the
-            current year to date. Tap any card to chart it below.
+            Pulled live from Shopify for the current year. Tap any card to
+            chart it below.
           </div>
         </div>
       </div>
       <section class="kpis" id="kpis"></section>
-      <div class="note">
-        KPI cards show the <b>current year to date</b>, live from the Shopify API.
-        2026 spans Jan–Jun (June month-to-date) — see the live summary above.
+      <div class="note" id="kpiNote">
+        Figures are live from Shopify for the year to date. Change % compares
+        the <b>same months last year</b>.
       </div>
       <section class="panel" id="chartPanel">
         <div class="panel-head">
@@ -904,7 +1151,12 @@
               <button data-g="month" class="on">Monthly</button
               ><button data-g="quarter">Quarterly</button
               ><button data-g="year">Full Year</button
-              ><button data-g="ytd">YTD Jan–May</button>
+              ><button
+                data-g="ytd"
+                title="Compares the same months in every year — fair when the newest year isn't finished"
+              >
+                Jan–May only
+              </button>
             </div>
             <div class="yearToggle" id="yearTog">
               <button class="ytog" data-y="2024">
@@ -927,9 +1179,9 @@
             ><i class="sw" style="background: var(--accent)"></i>2026
             (Jan–Jun)</span
           ><span id="ytdHint" style="color: var(--muted)"
-            >· Full-Year view shows 2024 &amp; 2025 only — use YTD to compare
-            2026.</span
-          >
+            >· Full-Year view shows 2024 &amp; 2025 only — use Jan–May to
+            compare 2026.</span
+          ><span id="deepDive" style="display: none"></span>
         </div>
       </section>
       <section class="panel feature" id="cmpPanel" style="display: none">
@@ -1008,7 +1260,7 @@
       <section class="panel" id="mdPanel">
         <div class="panel-head">
           <div>
-            <h2 id="tableTitle">Monthly Detail</h2>
+            <h2 id="tableTitle">Monthly Numbers</h2>
             <div class="desc" id="mdDesc"></div>
           </div>
           <div class="controls">
@@ -1054,9 +1306,12 @@
         >
           <canvas id="mdChart"></canvas>
         </div>
-        <div class="tbl-wrap" style="margin-top: 16px">
-          <table id="dataTable"></table>
-        </div>
+        <details class="tbl-fold">
+          <summary>Show monthly table ▾</summary>
+          <div class="tbl-wrap" style="margin-top: 10px">
+            <table id="dataTable"></table>
+          </div>
+        </details>
       </section>
       <section class="panel" id="tgtPanel">
         <div class="panel-head">
@@ -1120,6 +1375,19 @@
         </div>
         <div id="chanBody"></div>
         <div class="legend-note" id="chanFoot"></div>
+      </section>
+      <section class="panel" id="attribPanel" style="display: none">
+        <div class="panel-head">
+          <div>
+            <h2>Where Visitors &amp; Sales Come From</h2>
+            <div class="desc" id="attribDesc">
+              Store visits and orders by traffic source, plus the top
+              campaigns — for the selected date range.
+            </div>
+          </div>
+        </div>
+        <div id="attribBody"></div>
+        <div class="legend-note" id="attribFoot"></div>
       </section>
       <section class="panel" id="catPanel">
         <div class="panel-head">
@@ -1502,7 +1770,41 @@
         brand: "SG",
         metric: "revenue",
         gran: "month",
+        tab: "overview",
         years: { 2024: true, 2025: true, 2026: true },
+      };
+      // ---- Tab navigation -------------------------------------------------
+      // Each tab lists the panels it owns; a panel is visible when it's in the
+      // active tab AND eligible for the current brand (panelEligible). The hero
+      // (glancePanel) and the tab bar stay visible on every tab.
+      const TAB_PANELS = {
+        overview: ["kpiHead", "kpis", "kpiNote", "chartPanel", "groupPanel"],
+        sales: ["chartPanel", "mdPanel", "tgtPanel", "cmpPanel", "groupPanel"],
+        marketing: ["discPanel", "chanPanel", "attribPanel", "sessPanel", "funnelPanel"],
+        products: ["bestPanel", "galPanel", "catPanel", "catBestPanel", "saleMixPanel"],
+        customers: ["custPanel"],
+      };
+      const TAB_LABELS = {
+        overview: "Overview",
+        sales: "Sales",
+        marketing: "Marketing",
+        products: "Products",
+        customers: "Customers",
+      };
+      const ALL_TAB_PANELS = [...new Set(Object.values(TAB_PANELS).flat())];
+      // Which tab holds the deep-dive detail for each chartable metric.
+      const METRIC_TAB = {
+        revenue: "sales",
+        orders: "sales",
+        ordfulfilled: "sales",
+        aov: "sales",
+        units: "products",
+        sessions: "marketing",
+        conversion: "marketing",
+        newcust: "customers",
+        returncust: "customers",
+        discounts: "marketing",
+        voucher: "marketing",
       };
       let tgtState = { year: 2025 },
         bestState = { year: 2025, by: "revenue" },
@@ -1550,6 +1852,13 @@
       let CUR = BRANDS.SG.cur;
       function B() {
         return BRANDS[state.brand];
+      }
+      // Live "insight" sections from /api/insights (best sellers, discount codes,
+      // category mix, traffic attribution, targets), keyed by brand for the current
+      // picker window. Populated by loadWindow(); read via extrasOf().
+      const LIVE_EXTRAS = {};
+      function extrasOf() {
+        return LIVE_EXTRAS[state.brand] || {};
       }
       let chart,
         tgtChart,
@@ -1660,7 +1969,7 @@
           series: (y, g) => agg(B().ord[y], g),
         },
         ordfulfilled: {
-          label: "Orders Fulfilled",
+          label: "Orders Shipped",
           unit: "",
           kind: "line",
           higherBetter: true,
@@ -1687,7 +1996,7 @@
           series: (y, g) => agg(B().uni[y], g),
         },
         sessions: {
-          label: "Website Sessions",
+          label: "Store Visits",
           unit: "",
           kind: "line",
           higherBetter: true,
@@ -1731,7 +2040,7 @@
           series: (y, g) => agg(B().ret[y], g),
         },
         discounts: {
-          label: "Total Discounts",
+          label: "Discounts Given",
           unit: "$",
           kind: "bar",
           higherBetter: null,
@@ -1739,11 +2048,11 @@
           series: (y, g) => agg(B().dis[y], g),
         },
         voucher: {
-          label: "Voucher Order %",
+          label: "Gift-Card Orders %",
           unit: "%",
           kind: "line",
           higherBetter: null,
-          desc: "Share of orders using a discount code.",
+          desc: "Share of orders paid with a gift card or store credit.",
           series: (y, g) =>
             B().vou && B().vou[y]
               ? ratio(B().vou[y], B().ord[y], g, true)
@@ -1891,19 +2200,18 @@
       const CAT_REV_SANSMY = null;
       const CAT_REV_MONOSG = null;
       const CAT_REV_MONOMY = null;
+      const PROD_MAP = {
+        SG: PRODUCTS,
+        MY: PROD_MY,
+        TRTSG: PROD_TRTSG,
+        TRTMY: PROD_TRTMY,
+        SANSSG: PROD_SANSSG,
+        SANSMY: PROD_SANSMY,
+        MONOSG: PROD_MONOSG,
+        MONOMY: PROD_MONOMY,
+      };
       function prodOf() {
-        return (
-          {
-            SG: PRODUCTS,
-            MY: PROD_MY,
-            TRTSG: PROD_TRTSG,
-            TRTMY: PROD_TRTMY,
-            SANSSG: PROD_SANSSG,
-            SANSMY: PROD_SANSMY,
-            MONOSG: PROD_MONOSG,
-            MONOMY: PROD_MONOMY,
-          }[state.brand] || {}
-        );
+        return PROD_MAP[state.brand] || {};
       }
       const IMG_TRTSG = {
         "Watercolour Sleeveless Dress":
@@ -1998,8 +2306,12 @@
           ] || {})[n] || ""
         );
       }
+      // Live category mix from /api/insights (SKU-prefix map), keyed by brand →
+      // {year: {category: gross}}. Takes precedence over the baseline constants.
+      const LIVE_CATREV = {};
       function catOf() {
         return (
+          LIVE_CATREV[state.brand] ||
           {
             SG: CAT_REV,
             MY: CAT_REV_MY,
@@ -2009,31 +2321,80 @@
             SANSMY: CAT_REV_SANSMY,
             MONOSG: CAT_REV_MONOSG,
             MONOMY: CAT_REV_MONOMY,
-          }[state.brand] || null
+          }[state.brand] ||
+          null
         );
+      }
+      // Sum of the given month indices; null when no index has data.
+      function sumIdx(arr, idxs) {
+        if (!arr) return null;
+        let any = false,
+          t = 0;
+        idxs.forEach((i) => {
+          if (arr[i] != null) {
+            t += arr[i];
+            any = true;
+          }
+        });
+        return any ? t : null;
+      }
+      // A metric's value over specific month indices. Additive metrics just sum;
+      // the three ratio metrics are recomputed from their numerator/denominator so
+      // a like-for-like window compares correctly (a sum of monthly rates is wrong).
+      function likeForLike(k, y, idxs) {
+        const b = B();
+        if (k === "aov") {
+          const r = sumIdx(b.rev && b.rev[y], idxs),
+            o = sumIdx(b.ord && b.ord[y], idxs);
+          return r != null && o ? r / o : null;
+        }
+        if (k === "conversion") {
+          const conv = b.conversion && b.conversion[y],
+            ses = b.ses && b.ses[y];
+          if (conv && ses) {
+            const num = sumIdx(
+              conv.map((r, i) => (r == null || ses[i] == null ? null : r * ses[i])),
+              idxs,
+            );
+            const den = sumIdx(ses, idxs);
+            return num != null && den ? (num / den) * 100 : null;
+          }
+          const o = sumIdx(b.ord && b.ord[y], idxs),
+            s = sumIdx(b.ses && b.ses[y], idxs);
+          return o != null && s ? (o / s) * 100 : null;
+        }
+        if (k === "voucher") {
+          const v = sumIdx(b.vou && b.vou[y], idxs),
+            o = sumIdx(b.ord && b.ord[y], idxs);
+          return v != null && o ? (v / o) * 100 : null;
+        }
+        return sumIdx(METRICS[k].series(y, "month"), idxs);
       }
       function buildKPIs() {
         const host = document.getElementById("kpis");
         host.innerHTML = "";
-        // Only the current year is live (from Shopify); prior years are not pulled,
-        // so the KPI cards headline the live current-year-to-date figures and the YoY
-        // chip appears only when a real prior-year value exists (else "YTD").
+        // Cards headline the current year to date; the chip is a LIKE-FOR-LIKE
+        // year-on-year change — this year's data months vs the SAME months last
+        // year — matching the At-a-Glance hero, so both always agree.
         const PY = liveState.year,
           PRY = PY - 1;
-        // Only show a YoY % when the current year is COMPLETE (12 months of data).
-        // Otherwise the headline value stays the year-to-date aggregate but the chip
-        // reads "YTD" — comparing a partial year against a full prior year would be
-        // misleading. Like-for-like windowed YoY lives in the Live Summary tiles.
-        const curComplete =
-          METRICS.revenue.series(PY, "month").filter((v) => v != null).length >= 12;
-        KPI_ORDER.forEach((k, idx) => {
+        const active = [];
+        (B().rev && B().rev[PY] ? B().rev[PY] : []).forEach((v, i) => {
+          if (v != null) active.push(i);
+        });
+        const hasPrev = active.length > 0 && !(B().launch24 && PRY <= 2024);
+        const mRange = active.length
+          ? MONTHS[active[0]] +
+            (active.length > 1 ? "–" + MONTHS[active[active.length - 1]] : "")
+          : "";
+        const title = document.getElementById("kpiHeadTitle");
+        if (title) title.textContent = "Key Numbers — " + PY + (mRange ? " (" + mRange + ")" : "");
+        KPI_ORDER.forEach((k) => {
           const m = METRICS[k];
-          const vPr = m.series(PRY, "year")[0],
-            vP = m.series(PY, "year")[0];
-          let d =
-              curComplete && vPr != null && vP != null && vPr
-                ? ((vP - vPr) / vPr) * 100
-                : null,
+          const vP = m.series(PY, "year")[0];
+          const vLike = hasPrev ? likeForLike(k, PY, active) : null,
+            vPrev = hasPrev ? likeForLike(k, PRY, active) : null;
+          let d = vLike != null && vPrev != null && vPrev ? ((vLike - vPrev) / vPrev) * 100 : null,
             cls = "flat",
             arrow = "→";
           if (d != null && Math.abs(d) >= 0.05) {
@@ -2052,59 +2413,19 @@
           const subH =
             d == null
               ? `${PY} · year to date · live`
-              : `${PY} · vs ${fmtVal(m, vPr)} in ${PRY}`;
+              : `vs ${fmtVal(m, vPrev)} · ${mRange} ${PRY}`;
           card.innerHTML = `<div class="lbl">${m.label}</div><div class="val">${fmtVal(m, vP)}</div><div class="sub">${subH}</div>${chipH}<div class="barline"></div>`;
           card.onclick = () => selectMetric(k);
           host.appendChild(card);
         });
-        if (Object.keys(prodOf()).length) {
-          const c = document.createElement("div");
-          c.className =
-            "kpi" + (state.metric === "bestsellers" ? " active" : "");
-          c.dataset.metric = "bestsellers";
-          c.innerHTML =
-            '<div class="lbl">Best Sellers</div><div class="val" style="font-size:19px">Top 10</div><div class="sub">products &amp; category mix</div><div class="chip flat">view ▸</div><div class="barline"></div>';
-          c.onclick = () => selectMetric("bestsellers");
-          host.appendChild(c);
-        }
-        {
-          if (
-            state.brand !== "SGALL" &&
-            state.brand !== "MYALL" &&
-            state.brand !== "GROUP"
-          ) {
-            const c = document.createElement("div");
-            c.className = "kpi" + (state.metric === "funnel" ? " active" : "");
-            c.dataset.metric = "funnel";
-            c.innerHTML =
-              '<div class="lbl">Marketing Funnel</div><div class="val" style="font-size:19px">Drop-off</div><div class="sub">sessions → purchase</div><div class="chip flat">view ▸</div><div class="barline"></div>';
-            c.onclick = () => selectMetric("funnel");
-            host.appendChild(c);
-          }
-        }
-        {
-          if (
-            state.brand !== "SGALL" &&
-            state.brand !== "MYALL" &&
-            state.brand !== "GROUP"
-          ) {
-            const c = document.createElement("div");
-            c.className = "kpi" + (state.metric === "salemix" ? " active" : "");
-            c.dataset.metric = "salemix";
-            c.innerHTML =
-              '<div class="lbl">Sale vs Full-Price</div><div class="val" style="font-size:19px">Split</div><div class="sub">SKU · units · revenue</div><div class="chip flat">view ▸</div><div class="barline"></div>';
-            c.onclick = () => selectMetric("salemix");
-            host.appendChild(c);
-          }
-        }
       }
-      function renderLive() {
-        // The Live Summary shows the picker's window for the current year and compares it
-        // to the SAME calendar months a year earlier (the ▲/▼ arrows). The window fetch
-        // (LIVE_WIN) only covers the selected range's year, so it has no prior-year baseline
-        // on its own — we take the current-year figures from the window but the prior-year
-        // figures from full history (B(), which the chart/KPIs already load for all years).
-        // Roll-up/baseline brands have no window, so everything comes from full history.
+      // Compute the At-a-Glance figures: the picker's window for the current year,
+      // compared to the SAME calendar months a year earlier. The window fetch
+      // (LIVE_WIN) only covers the selected range's year, so it has no prior-year baseline
+      // on its own — we take the current-year figures from the window but the prior-year
+      // figures from full history (B(), which the chart/KPIs already load for all years).
+      // Roll-up/baseline brands have no window, so everything comes from full history.
+      function computeGlance() {
         const hist = B();
         const winData = LIVE_WIN[state.brand];
         const yr = liveState.year,
@@ -2170,35 +2491,171 @@
         const cvA = cvWin(yr), cvB = cvWin(prev);
         const ofA = win(LD.ordf && LD.ordf[yr]),
           ofB = win(LD.ordf && LD.ordf[prev]);
-        const T = [
-          ["Gross Sales", mny(rA), cmp(rA, rB), rB],
-          ["Orders", mi(oA), cmp(oA, oB), oB],
-          ["Orders Fulfilled", mi(ofA), cmp(ofA, ofB), ofB],
-          ["Avg Order Value", mny(aovA), cmp(aovA, aovB), aovB],
-          ["Units", mi(uA), cmp(uA, uB), uB],
-          ["Sessions", mi(sA), cmp(sA, sB), sB],
-          ["Conversion", mp(cvA), cmp(cvA, cvB), cvB],
-          ["Customers", mi(cA), cmp(cA, cB), cB],
-        ];
-        const host = document.getElementById("liveTiles");
-        host.innerHTML = "";
-        const pyy = "vs '" + String(prev).slice(2);
-        T.forEach((t) => {
-          let chip = '<div class="ts">' + (t[4] || "") + "</div>";
-          if (t[2] != null && t[3]) {
-            const d = ((t[2] - t[3]) / t[3]) * 100;
-            chip = `<div class="chip ${d >= 0 ? "up" : "down"}">${d >= 0 ? "▲ +" : "▼ "}${d.toFixed(1)}% ${pyy}</div>`;
-          }
-          const el = document.createElement("div");
-          el.className = "tile";
-          el.innerHTML = `<div class="tl">${t[0]}</div><div class="tv">${t[1]}</div>${chip}`;
-          host.appendChild(el);
-        });
+        return {
+          yr, prev, active, hasPrev,
+          rev: [rA, rB], ord: [oA, oB], ordf: [ofA, ofB], aov: [aovA, aovB],
+          uni: [uA, uB], ses: [sA, sB], conv: [cvA, cvB], cust: [cA, cB], dis: [dA, dB],
+          fmt: { mny, mi, mp },
+        };
+      }
+      // Human wording for the active date-range preset (feeds the insight bullets).
+      function windowPhrase() {
+        const on = document.querySelector("#datePresets button.on");
+        const p = on && on.dataset.preset;
+        return p === "mtd"
+          ? "so far this month"
+          : p === "30d"
+            ? "in the last 30 days"
+            : p === "90d"
+              ? "in the last 90 days"
+              : p === "ytd"
+                ? "so far this year"
+                : "in the selected period";
+      }
+      function renderLive() {
+        const G = computeGlance();
         document.getElementById("liveTitle").textContent = B().name + " — Live Summary";
-        document.getElementById("liveFoot").textContent =
-          "Live Shopify data for the selected date range. Gross Sales = product price × qty " +
-          "(before discounts & tax); AOV = (gross − discounts) ÷ orders. Sessions & Conversion " +
-          "come from Shopify Analytics (ShopifyQL). Currency " + CUR.code + ".";
+        const gw = document.getElementById("glanceWindow");
+        if (gw) {
+          const mr = G.active.length
+            ? MONTHS[G.active[0]] +
+              (G.active.length > 1 ? "–" + MONTHS[G.active[G.active.length - 1]] : "") +
+              " " + G.yr
+            : String(G.yr);
+          gw.innerHTML =
+            mr +
+            (G.hasPrev ? " · change vs the same months " + G.prev : "") +
+            ' · <span class="tip" data-tip="Live Shopify data for the selected date range. ' +
+            "Every ▲/▼ compares the exact same calendar months last year. Currency " +
+            CUR.code + '.">how this is calculated ⓘ</span>';
+        }
+        renderHeroTiles(G);
+        renderInsights(G);
+      }
+      function renderHeroTiles(G) {
+        const { mny, mi, mp } = G.fmt;
+        const pyy = "vs '" + String(G.prev).slice(2);
+        const tipL = (l, t) => (t ? `<span class="tip" data-tip="${t}">${l}</span>` : l);
+        const fill = (host, rows) => {
+          if (!host) return;
+          host.innerHTML = "";
+          rows.forEach((r) => {
+            const a = r.pair[0];
+            const b = G.hasPrev && a != null && r.pair[1] ? r.pair[1] : null;
+            let chip = '<div class="ts">' + (b == null && r.pair[1] != null ? r.f(r.pair[1]) + " " + pyy : "") + "</div>";
+            if (b != null) {
+              const d = ((a - b) / b) * 100;
+              chip = `<div class="chip ${d >= 0 ? "up" : "down"}">${d >= 0 ? "▲ +" : "▼ "}${d.toFixed(1)}% ${pyy}</div>`;
+            }
+            const el = document.createElement("div");
+            el.className = "tile";
+            el.innerHTML = `<div class="tl">${tipL(r.l, r.t)}</div><div class="tv">${r.f(r.pair[0])}</div>${chip}`;
+            host.appendChild(el);
+          });
+        };
+        fill(document.getElementById("liveTiles"), [
+          { l: "Gross Sales", t: "Product price × quantity, before discounts and tax", f: mny, pair: G.rev },
+          { l: "Orders", t: "Orders placed (excludes cancelled and test orders)", f: mi, pair: G.ord },
+          { l: "Avg Order Value", t: "Average spent per order = (sales − discounts) ÷ orders", f: mny, pair: G.aov },
+          { l: "Store Visits", t: "Visits to the website (Shopify sessions)", f: mi, pair: G.ses },
+          { l: "Conversion", t: "% of visits that end in an order", f: mp, pair: G.conv },
+          { l: "Units", t: "Items ordered across all orders", f: mi, pair: G.uni },
+        ]);
+        fill(document.getElementById("liveTiles2"), [
+          { l: "Orders Shipped", t: "Orders that left the warehouse — an order placed late in a month may ship the next month", f: mi, pair: G.ordf },
+          { l: "Customers", t: "Distinct customers who ordered (new + returning)", f: mi, pair: G.cust },
+          { l: "Discounts Given", t: "Value of discounts applied (codes + automatic offers)", f: mny, pair: G.dis },
+        ]);
+      }
+      // Auto-written plain-language bullets for the hero. Every rule is null-safe:
+      // missing data means the bullet is skipped, never an error. Max 6 bullets.
+      function renderInsights(G) {
+        const host = document.getElementById("insightList");
+        if (!host) return;
+        const EX = extrasOf();
+        const out = [];
+        const dPct = (pair) =>
+          G.hasPrev && pair[0] != null && pair[1] ? ((pair[0] - pair[1]) / pair[1]) * 100 : null;
+        // ① Sales headline (always, when there is a figure).
+        if (G.rev[0] != null) {
+          const d = dPct(G.rev);
+          let t = `${B().name} made <b>${money(G.rev[0])}</b> in gross sales ${windowPhrase()}`;
+          if (d != null) t += `, ${d >= 0 ? "up" : "down"} <b>${Math.abs(d).toFixed(1)}%</b> on the same period last year`;
+          out.push({ t: t + ".", tone: d == null ? "" : d >= 0 ? "good" : "bad" });
+        }
+        // ② Pace vs this month's target (needs targets + a window that reaches today).
+        const now = new Date(), mIdx = now.getMonth();
+        const tgt = EX.targets && EX.targets[G.yr] && EX.targets[G.yr][mIdx];
+        const winRev = LIVE_WIN[state.brand] && LIVE_WIN[state.brand].rev && LIVE_WIN[state.brand].rev[G.yr];
+        const mtd = winRev ? winRev[mIdx] : null;
+        if (tgt && mtd != null && G.active.includes(mIdx) && now.getFullYear() === G.yr) {
+          const days = new Date(G.yr, mIdx + 1, 0).getDate();
+          const expected = tgt * (now.getDate() / days);
+          const p = expected ? ((mtd - expected) / expected) * 100 : null;
+          if (p != null) {
+            const txt =
+              Math.abs(p) < 2
+                ? `${MONTHS[mIdx]} is tracking right on its ${money(tgt)} target.`
+                : `${MONTHS[mIdx]} is tracking <b>${Math.abs(p).toFixed(0)}% ${p > 0 ? "ahead of" : "behind"}</b> its ${money(tgt)} target.`;
+            out.push({ t: txt, tone: Math.abs(p) < 2 ? "" : p > 0 ? "good" : "bad" });
+          }
+        }
+        // ③ Biggest year-on-year mover (≥5%) among the operational metrics.
+        if (G.hasPrev) {
+          const cands = [
+            ["orders", G.ord, int],
+            ["average order value", G.aov, money],
+            ["store visits", G.ses, int],
+            ["conversion", G.conv, pct],
+            ["units sold", G.uni, int],
+            ["customers", G.cust, int],
+          ]
+            .map(([l, pair, f]) => ({ l, pair, f, d: dPct(pair) }))
+            .filter((c) => c.d != null && Math.abs(c.d) >= 5)
+            .sort((a, b) => Math.abs(b.d) - Math.abs(a.d));
+          if (cands.length) {
+            const c = cands[0];
+            out.push({
+              t: `Biggest change: ${c.l} ${c.d >= 0 ? "up" : "down"} <b>${Math.abs(c.d).toFixed(1)}%</b> year on year (${c.f(c.pair[1])} → ${c.f(c.pair[0])}).`,
+              tone: c.d >= 0 ? "good" : "bad",
+            });
+          }
+        }
+        // ④ Top discount code by sales generated.
+        const codes = EX.discounts && EX.discounts.codes;
+        if (codes && codes.length) {
+          const top = codes.slice().sort((a, b) => b.gross - a.gross)[0];
+          out.push({
+            t: `Top discount code: <b>${top.code}</b> — ${money(top.gross)} across ${int(top.orders)} orders (${money(top.discount)} given away).`,
+            tone: "",
+          });
+        }
+        // ⑤ Best seller by product.
+        const bt = EX.bestSellers && EX.bestSellers.byTitle;
+        if (bt && bt.length) {
+          out.push({
+            t: `Best seller: <b>“${bt[0].title}”</b> — ${int(bt[0].qty)} units, ${money(bt[0].gross)} in sales.`,
+            tone: "good",
+          });
+        }
+        // ⑥ Visits vs conversion moving in opposite directions.
+        const dS = dPct(G.ses), dC = dPct(G.conv);
+        if (dS != null && dC != null && Math.abs(dS) >= 3 && Math.abs(dC) >= 3 && dS * dC < 0) {
+          const revUp = (dPct(G.rev) || 0) >= 0;
+          out.push({
+            t:
+              dS < 0
+                ? `Store visits are down ${Math.abs(dS).toFixed(0)}% but conversion rose to ${pct(G.conv[0])} — fewer visitors, buying more often.`
+                : `Store visits are up ${dS.toFixed(0)}% but conversion slipped to ${pct(G.conv[0])} — more visitors, buying less often.`,
+            tone: revUp ? "good" : "bad",
+          });
+        }
+        host.innerHTML = out.length
+          ? out
+              .slice(0, 6)
+              .map((b) => `<li class="${b.tone}">${b.t}</li>`)
+              .join("")
+          : '<li>Waiting for live data — insights appear once Shopify responds.</li>';
       }
       function render() {
         const m = METRICS[state.metric];
@@ -2214,7 +2671,7 @@
             : g === "quarter"
               ? "Quarterly"
               : g === "ytd"
-                ? "Year-to-Date (Jan–May)"
+                ? "Jan–May"
                 : "Full Year";
         document.getElementById("tableTitle").textContent =
           gn +
@@ -2797,6 +3254,8 @@
         t.innerHTML = head + rows + "</tbody>";
       }
       function renderTargets() {
+        const panel = document.getElementById("tgtPanel");
+        if (!panel || panel.style.display === "none") return;
         const body = document.getElementById("tgtBody"),
           foot = document.getElementById("tgtFoot");
         if (tgtChart) {
@@ -2807,13 +3266,16 @@
         document
           .querySelectorAll("#tgtYear button")
           .forEach((b) => b.classList.toggle("on", b.dataset.y == String(y)));
-        if (!B().targets || !B().targets[y]) {
+        // A year whose target array is all nulls (the empty skeleton) counts as
+        // "no target" — real targets arrive via /api/insights (lib/targets.js).
+        const tgtArr = B().targets && B().targets[y];
+        if (!tgtArr || !tgtArr.some((v) => v != null)) {
           body.innerHTML =
             '<div class="empty">No ' +
             y +
             " sales target loaded for " +
             B().name +
-            " yet.</div>";
+            " yet. Targets are maintained in <b>lib/targets.js</b> — add the monthly numbers and redeploy.</div>";
           foot.textContent = "";
           return;
         }
@@ -2950,12 +3412,15 @@
           b.classList.toggle("on", +b.dataset.y === y);
         });
         const data = cr[y],
-          tot = CATS.reduce((s, c) => s + (data[c] || 0), 0);
+          // Category names come from the data itself (live mixes have their own
+          // taxonomy); fall back to the baseline CATS list ordering where it applies.
+          cats = Object.keys(data).sort((a, b) => (data[b] || 0) - (data[a] || 0)),
+          tot = cats.reduce((s, c) => s + (data[c] || 0), 0);
         body.innerHTML =
-          '<div class="chart-box" style="height:clamp(280px,38vw,380px)"><canvas id="catChart"></canvas></div><div class="tbl-wrap" style="margin-top:16px"><table id="catTable"></table></div>';
-        const vals = CATS.map((c) => data[c] || 0),
-          colors = CATS.map((c, i) => {
-            const t = i / (CATS.length - 1 || 1),
+          '<div class="chart-box" style="height:clamp(280px,38vw,380px)"><canvas id="catChart"></canvas></div><details class="tbl-fold"><summary>Show table ▾</summary><div class="tbl-wrap" style="margin-top:10px"><table id="catTable"></table></div></details>';
+        const vals = cats.map((c) => data[c] || 0),
+          colors = cats.map((c, i) => {
+            const t = i / (cats.length - 1 || 1),
               lp = (a, b) => Math.round(a + (b - a) * t);
             return (
               "rgb(" +
@@ -2970,7 +3435,7 @@
         catChart = new Chart(document.getElementById("catChart"), {
           type: "bar",
           data: {
-            labels: CATS,
+            labels: cats,
             datasets: [
               {
                 data: vals,
@@ -3024,7 +3489,7 @@
           "<thead><tr><th>Category</th><th>Revenue (" +
           y +
           ")</th><th>Share</th></tr></thead><tbody>";
-        let bd = CATS.map(
+        let bd = cats.map(
           (c) =>
             "<tr><td>" +
             c +
@@ -3092,8 +3557,7 @@
         document.getElementById("catBestDesc").textContent =
           B().name +
           " top sellers grouped by category, " +
-          cbY +
-          (cbY === 2026 ? " (Jan\u2013May)" : "") +
+          (extrasOf().bestSellers ? "selected date range" : cbY) +
           ".";
         if (!yd || !(yd.revenue || []).length) {
           body.innerHTML =
@@ -3187,6 +3651,8 @@
         body.innerHTML = html;
       }
       function renderBest() {
+        const panel = document.getElementById("bestPanel");
+        if (!panel || panel.style.display === "none") return;
         const body = document.getElementById("bestBody");
         if (bestChart) {
           bestChart.destroy();
@@ -3204,11 +3670,11 @@
           return;
         }
         body.innerHTML =
-          '<div class="chart-box" style="height:clamp(360px,46vw,500px)"><canvas id="bestChart"></canvas></div><div class="tbl-wrap" style="margin-top:18px"><table id="bestTable"></table></div>';
+          '<div class="chart-box" style="height:clamp(360px,46vw,500px)"><canvas id="bestChart"></canvas></div><details class="tbl-fold"><summary>Show table ▾</summary><div class="tbl-wrap" style="margin-top:10px"><table id="bestTable"></table></div></details>';
         const rows = yd[bestState.by],
           byRev = bestState.by === "revenue";
         document.getElementById("bestDesc").textContent =
-          `${B().name} top 10 in ${bestState.year}${bestState.year === 2026 ? " (Jan–Jun)" : ""}, by ${byRev ? "revenue" : "units"}.`;
+          `${B().name} top 10 ${extrasOf().bestSellers ? "for the selected date range" : "in " + bestState.year}, by ${byRev ? "revenue" : "units"}.`;
         document
           .querySelectorAll("#bestYear button")
           .forEach((b) =>
@@ -3295,6 +3761,8 @@
         document.getElementById("bestTable").innerHTML = head + bd + "</tbody>";
       }
       function renderGallery() {
+        const panel = document.getElementById("galPanel");
+        if (!panel || panel.style.display === "none") return;
         const body = document.getElementById("galBody");
         const yd = prodOf()[galState.year];
         if (!yd) {
@@ -3311,7 +3779,7 @@
         const rows = yd[galState.by],
           byRev = galState.by === "revenue";
         document.getElementById("galDesc").textContent =
-          `${B().name} top 10 by ${byRev ? "revenue" : "units"} — ${galState.year}${galState.year === 2026 ? " (Jan–Jun)" : ""}.`;
+          `${B().name} top 10 by ${byRev ? "revenue" : "units"} — ${extrasOf().bestSellers ? "selected date range" : galState.year}.`;
         document
           .querySelectorAll("#galYear button")
           .forEach((b) =>
@@ -3339,6 +3807,140 @@
       function show(id, on) {
         const e = document.getElementById(id);
         if (e) e.style.display = on ? "" : "none";
+      }
+      // Traffic attribution — visits & orders by source, top campaigns. Lives on
+      // the Marketing tab; data comes from /api/insights (extrasOf().traffic).
+      function renderAttribution() {
+        const panel = document.getElementById("attribPanel");
+        if (!panel || panel.style.display === "none") return;
+        const body = document.getElementById("attribBody"),
+          foot = document.getElementById("attribFoot");
+        const tr = extrasOf().traffic;
+        if (!tr) {
+          body.innerHTML =
+            '<div class="empty">Traffic attribution for ' +
+            B().name +
+            " hasn’t loaded yet.</div>";
+          foot.textContent = "";
+          return;
+        }
+        const nm = (s) =>
+          s == null ? "Direct / unknown" : s.charAt(0).toUpperCase() + s.slice(1);
+        const block = (title, head, rows) =>
+          '<div><h3 style="font-family:Fraunces,serif;font-size:15px;margin:0 0 6px;border-bottom:1.5px solid var(--ink);padding-bottom:6px">' +
+          title +
+          '</h3><table style="min-width:0">' +
+          head +
+          "<tbody>" +
+          rows.join("") +
+          "</tbody></table></div>";
+        const parts = [];
+        if (tr.referrers && tr.referrers.length) {
+          const tot = tr.referrers.reduce((t, r) => t + r.sessions, 0);
+          parts.push(
+            block(
+              "Visits by source",
+              "<thead><tr><th>Source</th><th>Visits</th><th>Share</th></tr></thead>",
+              tr.referrers.map(
+                (r) =>
+                  "<tr><td>" +
+                  nm(r.source) +
+                  "</td><td>" +
+                  int(r.sessions) +
+                  "</td><td>" +
+                  (tot ? ((r.sessions / tot) * 100).toFixed(1) : "0") +
+                  "%</td></tr>",
+              ),
+            ),
+          );
+        }
+        if (tr.orderReferrers && tr.orderReferrers.length) {
+          parts.push(
+            block(
+              "Orders by source",
+              "<thead><tr><th>Source</th><th>Orders</th><th>Sales</th></tr></thead>",
+              tr.orderReferrers.map(
+                (r) =>
+                  "<tr><td>" +
+                  (r.source == null ? "Unattributed" : nm(r.source)) +
+                  "</td><td>" +
+                  int(r.orders) +
+                  "</td><td>" +
+                  money(r.sales) +
+                  "</td></tr>",
+              ),
+            ),
+          );
+        }
+        if (tr.campaigns && tr.campaigns.length) {
+          parts.push(
+            block(
+              "Top campaigns (visits)",
+              "<thead><tr><th>Campaign</th><th>Visits</th></tr></thead>",
+              tr.campaigns.map(
+                (r) =>
+                  '<tr><td style="white-space:normal;max-width:260px">' +
+                  r.campaign +
+                  "</td><td>" +
+                  int(r.sessions) +
+                  "</td></tr>",
+              ),
+            ),
+          );
+        }
+        body.innerHTML = parts.length
+          ? '<div class="attrib-grid">' + parts.join("") + "</div>"
+          : '<div class="empty">No attribution data for this range.</div>';
+        foot.textContent =
+          "Attribution is what Shopify can see (referrer + UTM). It shows where visitors and orders " +
+          "came from — not ad spend or ROAS. “Orders by source · Sales” includes tax & shipping.";
+      }
+      // Fold the /api/insights sections into the page: LIVE_EXTRAS feeds the hero
+      // insights + attribution; the other sections are translated into the panels'
+      // existing data containers so their renderers work unchanged.
+      function applyExtras(brand, sections, range) {
+        LIVE_EXTRAS[brand] = sections || {};
+        const yr = +((range && range.end && range.end.slice(0, 4)) || new Date().getFullYear());
+        // Targets → BRANDS[brand].targets (renderTargets reads B().targets[year]).
+        if (sections && sections.targets) {
+          BRANDS[brand].targets = BRANDS[brand].targets || {};
+          Object.keys(sections.targets).forEach(function (y) {
+            BRANDS[brand].targets[y] = sections.targets[y];
+          });
+          tgtState.year = yr;
+        }
+        // Discount codes → DISCOUNTS[brand][yr]: [code, revenue, orders, given, type].
+        const dc = sections && sections.discounts && sections.discounts.codes;
+        if (dc && dc.length) {
+          DISCOUNTS[brand] = {};
+          DISCOUNTS[brand][yr] = dc.map(function (c) {
+            return [c.code, c.gross, c.orders, c.discount, "code"];
+          });
+          discState.year = yr;
+          delete DISC_PARTIAL[brand];
+        }
+        // Best sellers → PROD_<brand>[yr] {revenue, units}: [name, rev, units, orders, sku].
+        const bs = sections && sections.bestSellers;
+        if (bs && bs.byTitle && bs.byTitle.length && PROD_MAP[brand]) {
+          const rows = bs.byTitle.map(function (p) {
+            return [p.title, p.gross, p.qty, p.orders || 0, "—"];
+          });
+          PROD_MAP[brand][yr] = {
+            revenue: rows.slice().sort(function (a, b) { return b[1] - a[1]; }),
+            units: rows.slice().sort(function (a, b) { return b[2] - a[2]; }),
+          };
+          bestState.year = galState.year = catBestState.year = yr;
+        }
+        // Category mix → LIVE_CATREV[brand][yr] = {category: gross}.
+        const cm = sections && sections.categories && sections.categories.rows;
+        if (cm && cm.length) {
+          LIVE_CATREV[brand] = {};
+          LIVE_CATREV[brand][yr] = {};
+          cm.forEach(function (r) {
+            LIVE_CATREV[brand][yr][r.category] = r.gross;
+          });
+          catState.year = yr;
+        }
       }
       function addTile(host, label, val, sub) {
         const el = document.createElement("div");
@@ -3409,7 +4011,7 @@
           : "";
         body.innerHTML =
           banner +
-          '<div class="tiles" id="discTiles"></div><div class="chart-box" style="height:clamp(240px,30vw,330px);margin-top:16px"><canvas id="discChart"></canvas></div><div class="tbl-wrap" style="margin-top:16px"><table id="discTable"></table></div>';
+          '<div class="tiles" id="discTiles"></div><div class="chart-box" style="height:clamp(240px,30vw,330px);margin-top:16px"><canvas id="discChart"></canvas></div><details class="tbl-fold"><summary>Show table ▾</summary><div class="tbl-wrap" style="margin-top:10px"><table id="discTable"></table></div></details>';
         const tl = document.getElementById("discTiles");
         addTile(
           tl,
@@ -6018,55 +6620,43 @@
             ".";
         }
       }
+      // Brand-level eligibility for each panel (the metric-level gating the old
+      // applyPanels did is gone — a tab shows all its brand-eligible panels).
+      function panelEligible(id) {
+        const b = state.brand,
+          isGroup = b === "GROUP",
+          isAll = b === "SGALL" || b === "MYALL" || isGroup,
+          indiv = !isAll;
+        switch (id) {
+          case "kpiHead":
+          case "kpis":
+          case "kpiNote":
+          case "chartPanel":
+          case "mdPanel":
+            return !isGroup;
+          case "groupPanel":
+            return isGroup;
+          case "cmpPanel":
+            return isAll && !isGroup;
+          case "chanPanel":
+            return !!CHANNELMIX[b] && !isGroup;
+          default:
+            // tgtPanel, attribPanel, discPanel, sessPanel, funnelPanel,
+            // saleMixPanel, custPanel, bestPanel, galPanel, catPanel, catBestPanel
+            return indiv;
+        }
+      }
       function applyPanels() {
-        const b = state.brand;
-        if (b === "FORECAST") {
-          [
-            "kpis",
-            "groupPanel",
-            "chartPanel",
-            "mdPanel",
-            "cmpPanel",
-            "tgtPanel",
-            "chanPanel",
-            "discPanel",
-            "sessPanel",
-            "custPanel",
-            "funnelPanel",
-            "saleMixPanel",
-            "bestPanel",
-            "catPanel",
-            "catBestPanel",
-            "galPanel",
-          ].forEach((id) => show(id, false));
-          show("fcPanel", true);
+        const fc = state.brand === "FORECAST";
+        show("tabBar", !fc);
+        show("glancePanel", !fc);
+        show("fcPanel", fc);
+        if (fc) {
+          ALL_TAB_PANELS.forEach((id) => show(id, false));
           return;
         }
-        show("fcPanel", false);
-        const isGroup = b === "GROUP",
-          isAll = b === "SGALL" || b === "MYALL" || b === "GROUP",
-          indiv = !isAll,
-          mt = state.metric,
-          isBest = mt === "bestsellers",
-          isFunnel = mt === "funnel",
-          isSale = mt === "salemix",
-          chanOK = !!CHANNELMIX[b];
-        show("kpis", !isGroup);
-        show("groupPanel", isGroup);
-        show("chartPanel", !isBest && !isFunnel && !isSale && !isGroup);
-        show("mdPanel", !isBest && !isFunnel && !isSale && !isGroup);
-        show("cmpPanel", isAll && !isFunnel && !isSale && !isGroup);
-        show("tgtPanel", indiv && mt === "revenue");
-        show("chanPanel", mt === "revenue" && chanOK && !isGroup);
-        show("discPanel", indiv && mt === "discounts");
-        show("sessPanel", indiv && mt === "sessions");
-        show("custPanel", indiv && (mt === "newcust" || mt === "returncust"));
-        show("funnelPanel", isFunnel && indiv);
-        show("saleMixPanel", isSale && indiv);
-        show("bestPanel", indiv && isBest);
-        show("catPanel", indiv && isBest);
-        show("catBestPanel", indiv && isBest);
-        show("galPanel", indiv && isBest);
+        const cur = new Set(TAB_PANELS[state.tab] || []);
+        ALL_TAB_PANELS.forEach((id) => show(id, cur.has(id) && panelEligible(id)));
       }
       function selectMetric(k) {
         state.metric = k;
@@ -6100,6 +6690,74 @@
         } else if (k === "discounts") renderDiscount();
         else if (k === "sessions") renderSessions();
         else if (k === "newcust" || k === "returncust") renderCustomers();
+        updateDeepDive(k);
+      }
+      // "Full detail → <tab>" link under the main chart: charting a metric on the
+      // Overview points at the tab holding its deep-dive panels.
+      function updateDeepDive(k) {
+        const el = document.getElementById("deepDive");
+        if (!el) return;
+        const t = METRIC_TAB[k];
+        if (!t || t === state.tab || !tabAvailable(t)) {
+          el.style.display = "none";
+          return;
+        }
+        el.style.display = "";
+        el.textContent = "· Full detail → " + TAB_LABELS[t];
+        el.onclick = () => switchTab(t);
+      }
+      // ---- Tab controller ---------------------------------------------------
+      function tabAvailable(t) {
+        return (TAB_PANELS[t] || []).some(panelEligible);
+      }
+      function updateTabBar() {
+        document.querySelectorAll("#tabBar button").forEach((b) => {
+          b.classList.toggle("on", b.dataset.tab === state.tab);
+          b.disabled = !tabAvailable(b.dataset.tab);
+        });
+      }
+      // Every renderer self-guards on a hidden panel, so re-running a tab's whole
+      // list is safe and keeps each panel current with the live data.
+      const TAB_RENDERERS = {
+        overview: () => {
+          if (state.brand === "GROUP") renderGroup();
+          else render();
+        },
+        sales: () => {
+          if (state.brand === "GROUP") renderGroup();
+          else render();
+          renderTargets();
+          renderCompare();
+        },
+        marketing: () => {
+          renderDiscount();
+          renderChannel();
+          renderAttribution();
+          renderSessions();
+          renderFunnel();
+        },
+        products: () => {
+          renderBest();
+          renderCategory();
+          renderCategoryBest();
+          renderGallery();
+          renderSaleMix();
+        },
+        customers: () => {
+          renderCustomers();
+        },
+      };
+      function runTabRenderers() {
+        (TAB_RENDERERS[state.tab] || (() => {}))();
+      }
+      function switchTab(t) {
+        state.tab = t;
+        applyPanels();
+        updateTabBar();
+        runTabRenderers();
+        updateDeepDive(state.metric);
+        const info = typeof LIVE !== "undefined" && LIVE[state.brand];
+        markComingSoonPanels(!!(info && info.ok));
       }
       function custVals(year, period) {
         const nw = B().cust[year],
@@ -6771,7 +7429,9 @@
             '<div style="text-align:center;font-size:11px;color:var(--muted);margin:5px 0 2px">' +
             (pend
               ? "pending Shopify pull"
-              : pctS.toFixed(1) + "% of sessions") +
+              : pctS == null
+                ? "–"
+                : pctS.toFixed(1) + "% of sessions") +
             "&nbsp;\u00b7&nbsp;" +
             sub +
             "</div>" +
@@ -7042,18 +7702,13 @@
           renderForecast();
           return;
         }
-        if (state.metric === "bestsellers" && !Object.keys(prodOf()).length)
-          state.metric = "revenue";
-        if (
-          (state.metric === "salemix" || state.metric === "funnel") &&
-          (b === "SGALL" || b === "MYALL" || b === "GROUP")
-        )
-          state.metric = "revenue";
+        if (!METRICS[state.metric]) state.metric = "revenue";
+        if (!tabAvailable(state.tab)) state.tab = "overview";
         buildKPIs();
         renderLive();
         selectMetric(state.metric);
-        if (b === "GROUP") renderGroup();
-        else if (b === "SGALL" || b === "MYALL") renderCompare();
+        updateTabBar();
+        runTabRenderers();
       }
       // Select a brand: render it immediately from whatever data is present (baseline or
       // already-loaded live), then kick off its live load. Loading is triggered here (on
@@ -7065,6 +7720,9 @@
       document
         .querySelectorAll("#brandSeg button")
         .forEach((b) => (b.onclick = () => onBrandSelect(b.dataset.b)));
+      document
+        .querySelectorAll("#tabBar button")
+        .forEach((b) => (b.onclick = () => switchTab(b.dataset.tab)));
       document.querySelectorAll("#liveYear button").forEach(
         (b) =>
           (b.onclick = () => {
@@ -7395,10 +8053,11 @@
       function setLiveStatus(msg, cls) {
         var el = document.getElementById("liveStatus");
         if (!el) {
-          var meta = document.querySelector("header .meta") || document.body;
+          var slot = document.getElementById("tabBarStatus") ||
+            document.querySelector("header .meta") || document.body;
           el = document.createElement("div");
           el.id = "liveStatus";
-          meta.appendChild(el);
+          slot.appendChild(el);
         }
         if (cls === "warn") {
           el.textContent = msg;
@@ -7431,12 +8090,25 @@
         var SOON = [
           "chanPanel", "tgtPanel", "sessPanel", "funnelPanel", "saleMixPanel",
           "discPanel", "catPanel", "catBestPanel", "bestPanel", "galPanel",
+          "attribPanel",
         ];
+        // A panel whose backing /api/insights section has loaded is live — no badge.
+        var HAS = {
+          tgtPanel: "targets",
+          discPanel: "discounts",
+          catPanel: "categories",
+          catBestPanel: "bestSellers",
+          bestPanel: "bestSellers",
+          galPanel: "bestSellers",
+          attribPanel: "traffic",
+        };
+        var extras = extrasOf();
         document.querySelectorAll(".cs-badge").forEach(function (n) { n.remove(); });
         if (!isLiveSG) return;
         SOON.forEach(function (id) {
           var p = document.getElementById(id);
           if (!p || p.style.display === "none") return;
+          if (HAS[id] && extras[HAS[id]]) return;
           var tag = document.createElement("div");
           tag.className = "cs-badge";
           tag.textContent = "Coming soon";
@@ -7497,7 +8169,8 @@
         }
         function ensure() {
           if (el && document.body.contains(el)) return;
-          var meta = document.querySelector("header .meta") || document.body;
+          var slot = document.getElementById("tabBarStatus") ||
+            document.querySelector("header .meta") || document.body;
           el = document.createElement("div");
           el.id = "connBar";
           el.className = "conn";
@@ -7505,7 +8178,7 @@
             '<span class="conn-dot"></span>' +
             '<div class="conn-track"><div class="conn-fill"></div></div>' +
             '<span class="conn-label"></span>';
-          meta.appendChild(el);
+          slot.appendChild(el);
           fill = el.querySelector(".conn-fill");
           label = el.querySelector(".conn-label");
           dot = el.querySelector(".conn-dot");
@@ -7659,6 +8332,22 @@
           })
           .catch(function () {});
 
+        // Phase 3 (background, non-blocking): the insight sections — best sellers,
+        // discount codes, category mix, traffic attribution, targets — from
+        // /api/insights, one round trip. Applied whenever it lands: the hero's
+        // insight bullets and the Marketing/Products panels refresh in place.
+        fetchJSON("/api/insights?" + qs)
+          .then(function (payload) {
+            if (!payload || !payload.sections) return;
+            applyExtras(brand, payload.sections, payload.meta && payload.meta.range);
+            if (brand === state.brand) {
+              renderLive();
+              runTabRenderers();
+              markComingSoonPanels(!!liveInfo(brand).ok);
+            }
+          })
+          .catch(function () {});
+
         // Phase 1 (fast): ShopifyQL-only `light` fetch drives the Live Summary immediately.
         // No order pagination, so changing the date range feels near-instant instead of
         // waiting on the full Orders pull that Phase 2 handles in the background.
@@ -7667,6 +8356,14 @@
             info.winLoading = false; info.winRange = key;
             LIVE_WIN[brand] =
               payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
+            // A failed window fetch would otherwise silently show full-history
+            // figures under the new range's wording — say so instead.
+            if (!LIVE_WIN[brand] && brand === state.brand && payload && payload.meta && payload.meta.reason) {
+              setLiveStatus(
+                "Selected range unavailable (" + payload.meta.reason + ") — summary shows full-year figures.",
+                "warn",
+              );
+            }
             // Point the summary's comparison year at the new window's latest year, together
             // with the new data, so the year-over-year arrows are computed against the right
             // baseline and update in one render (no flashing).

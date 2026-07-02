@@ -12,6 +12,7 @@
     "verify-token": "node scripts/verify-token.js",
     "verify-shopifyql": "node scripts/verify-shopifyql.js",
     "preview": "node scripts/preview.js",
+    "preview-insights": "node scripts/preview-insights.js",
     "test": "node scripts/test.js"
   }
 }

@@ -22,6 +22,25 @@ import {
   bucketSessions,
   bucketFulfillments,
 } from "../lib/shopifyql.js";
+import {
+  SKU_PULL_LIMIT,
+  buildSkuSalesQL,
+  buildTitleSalesQL,
+  buildDiscountCodesQL,
+  buildReferrersQL,
+  buildOrderReferrersQL,
+  buildCampaignsQL,
+  parseTopSkus,
+  parseTopTitles,
+  parseDiscountCodes,
+  parseReferrers,
+  parseOrderReferrers,
+  parseCampaigns,
+  categorizeSku,
+  buildCategoryMix,
+} from "../lib/insights.js";
+import { CATEGORY_MAP } from "../lib/category-map.js";
+import { TARGETS, validateTargets, getTargets } from "../lib/targets.js";
 
 let passed = 0;
 const tests = [];
@@ -345,6 +364,150 @@ test("bucketSales splits a multi-year range and ignores out-of-range years", () 
   assert.equal(m.rev[2025][11], 5000); // December 2025
   assert.equal(m.ord[2026][0], 90); // January 2026
   assert.ok(!(2027 in m.rev)); // year outside the requested set is dropped entirely
+});
+
+// ---- Insights builders + parsers (lib/insights.js) ----
+
+test("insight builders emit the expected ShopifyQL", () => {
+  const sku = buildSkuSalesQL("2026-06-01", "2026-06-30");
+  assert.ok(/^FROM sales SHOW quantity_ordered, gross_sales, net_sales, orders GROUP BY product_variant_sku/.test(sku));
+  assert.ok(sku.includes(`ORDER BY quantity_ordered DESC LIMIT ${SKU_PULL_LIMIT} SINCE 2026-06-01 UNTIL 2026-06-30`));
+  const title = buildTitleSalesQL("2026-06-01", "2026-06-30", 10);
+  assert.ok(/GROUP BY product_title ORDER BY quantity_ordered DESC LIMIT 10/.test(title));
+  assert.ok(/^FROM sales SHOW discounts, orders, gross_sales GROUP BY discount_code SINCE 2026-06-01 UNTIL 2026-06-30$/.test(buildDiscountCodesQL("2026-06-01", "2026-06-30")));
+  assert.ok(/^FROM sessions SHOW sessions GROUP BY referrer_source SINCE /.test(buildReferrersQL("2026-06-01", "2026-06-30")));
+  assert.ok(/^FROM sales SHOW orders, total_sales GROUP BY order_referrer_source SINCE /.test(buildOrderReferrersQL("2026-06-01", "2026-06-30")));
+  assert.ok(/^FROM sessions SHOW sessions GROUP BY utm_campaign SINCE /.test(buildCampaignsQL("2026-06-01", "2026-06-30")));
+});
+
+test("parseTopSkus parses strings, rounds money, drops null skus, respects limit", () => {
+  const rows = [
+    { product_variant_sku: "AFBS0001-BLK-M", quantity_ordered: "14", gross_sales: "133.026", net_sales: "133.02" },
+    { product_variant_sku: null, quantity_ordered: "99", gross_sales: "999", net_sales: "999" },
+    { product_variant_sku: "BFDQ0002-TGN-M", quantity_ordered: "12", gross_sales: "110.1", net_sales: "110.1" },
+    { product_variant_sku: "AFSK0003-BLK-M", quantity_ordered: "20", gross_sales: "91.744", net_sales: "91.74" },
+  ];
+  const top = parseTopSkus(rows, 2);
+  assert.equal(top.length, 2);
+  assert.equal(top[0].sku, "AFSK0003-BLK-M"); // sorted by qty desc, null sku dropped
+  assert.equal(top[1].sku, "AFBS0001-BLK-M");
+  assert.equal(top[1].gross, 133.03); // round2
+  assert.equal(top[0].qty, 20);
+  const titles = parseTopTitles([{ product_title: "Knit Top", quantity_ordered: "91", gross_sales: "1726.72", net_sales: "1700", orders: "38" }], 5);
+  assert.deepEqual(titles, [{ title: "Knit Top", qty: 91, gross: 1726.72, net: 1700, orders: 38 }]);
+});
+
+test("parseDiscountCodes: null code → noCode, discounts flipped positive, sorted, tail folds into others", () => {
+  const rows = [
+    { discount_code: null, discounts: "0", orders: "900", gross_sales: "66000" },
+    { discount_code: "SMALL", discounts: "-10.005", orders: "2", gross_sales: "100" },
+    { discount_code: "JUNSAVE15", discounts: "-1361.49", orders: "99", gross_sales: "9007.12" },
+    { discount_code: "MID", discounts: "-300", orders: "30", gross_sales: "2000" },
+    { discount_code: "TINY", discounts: "-5", orders: "1", gross_sales: "40" },
+  ];
+  const d = parseDiscountCodes(rows, 2);
+  assert.deepEqual(d.noCode, { orders: 900, gross: 66000, discount: 0 });
+  assert.equal(d.codes.length, 2);
+  assert.equal(d.codes[0].code, "JUNSAVE15"); // sorted by discount desc
+  assert.equal(d.codes[0].discount, 1361.49); // positive magnitude
+  assert.equal(d.codes[1].code, "MID");
+  assert.deepEqual(d.others, { count: 2, orders: 3, gross: 140, discount: 15.01 }); // SMALL + TINY
+  // No overflow -> others is null
+  assert.equal(parseDiscountCodes(rows, 50).others, null);
+});
+
+test("traffic parsers: sort desc, preserve null referrer, drop null campaigns, respect limit", () => {
+  const refs = parseReferrers([
+    { referrer_source: "social", sessions: "24842" },
+    { referrer_source: "direct", sessions: "50657" },
+    { referrer_source: null, sessions: "5801" },
+  ]);
+  assert.equal(refs[0].source, "direct");
+  assert.equal(refs[2].source, null); // preserved
+  const ords = parseOrderReferrers([
+    { order_referrer_source: "search", orders: "391", total_sales: "26320.379" },
+    { order_referrer_source: null, orders: "808", total_sales: "53755.14" },
+  ]);
+  assert.equal(ords[0].source, null); // sorted by orders desc, null preserved
+  assert.equal(ords[1].sales, 26320.38); // round2
+  const camps = parseCampaigns([
+    { utm_campaign: null, sessions: "69087" },
+    { utm_campaign: "B", sessions: "1413" },
+    { utm_campaign: "A", sessions: "15079" },
+    { utm_campaign: "", sessions: "22" },
+  ], 1);
+  assert.deepEqual(camps, [{ campaign: "A", sessions: 15079 }]); // nulls dropped, limit applied
+});
+
+test("categorizeSku: longest prefix wins, case-insensitive, override beats prefix, unknown/null → fallback", () => {
+  const map = {
+    prefixes: { AFB: "Generic A", AFBS: "Blouses" },
+    overrides: { "afbs0001-blk-m": "Special" },
+    fallback: "Other",
+  };
+  assert.equal(categorizeSku("AFBS0002", map), "Blouses"); // longest prefix wins over AFB
+  assert.equal(categorizeSku("AFBX0002", map), "Generic A"); // falls back to shorter prefix
+  assert.equal(categorizeSku("afbs0002", map), "Blouses"); // case-insensitive
+  assert.equal(categorizeSku("AFBS0001-BLK-M", map), "Special"); // override wins
+  assert.equal(categorizeSku("ZZXX1234", map), "Other");
+  assert.equal(categorizeSku(null, map), "Other");
+  assert.equal(categorizeSku("", map), "Other");
+});
+
+test("buildCategoryMix aggregates, shares sum to 1, unmapped prefixes reported", () => {
+  const map = { prefixes: { AFBS: "Blouses" }, overrides: {}, fallback: "Other" };
+  const rows = [
+    { product_variant_sku: "AFBS0001", quantity_ordered: "10", gross_sales: "100" },
+    { product_variant_sku: "AFBS0002", quantity_ordered: "5", gross_sales: "50" },
+    { product_variant_sku: "ZZXX9999", quantity_ordered: "2", gross_sales: "50" },
+  ];
+  const mix = buildCategoryMix(rows, map);
+  assert.equal(mix.rows[0].category, "Blouses");
+  assert.equal(mix.rows[0].gross, 150);
+  assert.equal(mix.rows[0].qty, 15);
+  assert.equal(mix.rows[0].share, 0.75);
+  assert.equal(mix.rows[1].category, "Other");
+  assert.equal(mix.rows[1].share, 0.25);
+  const shareSum = mix.rows.reduce((t, r) => t + r.share, 0);
+  assert.ok(Math.abs(shareSum - 1) < 1e-9);
+  assert.equal(mix.unmapped.length, 1);
+  assert.equal(mix.unmapped[0].prefix, "ZZXX");
+  assert.equal(mix.unmapped[0].gross, 50);
+  assert.equal(mix.truncated, false);
+});
+
+// ---- Targets (lib/targets.js) ----
+
+test("validateTargets rejects malformed data with precise messages", () => {
+  assert.throws(() => validateTargets(null), /must be an object/);
+  assert.throws(() => validateTargets({ SG: { 26: Array(12).fill(null) } }), /4-digit year/);
+  assert.throws(() => validateTargets({ SG: { 2026: Array(11).fill(null) } }), /exactly 12/);
+  assert.throws(() => validateTargets({ SG: { 2026: [...Array(11).fill(null), "1000"] } }), /non-negative number/);
+  assert.throws(() => validateTargets({ SG: { 2026: [...Array(11).fill(null), -5] } }), /non-negative number/);
+  assert.equal(validateTargets({ SG: { 2026: [150000, ...Array(11).fill(null)] } }), true);
+});
+
+test("getTargets returns {year:[12]} copies for requested years only; null when absent", () => {
+  const data = { SG: { 2025: Array(12).fill(1000), 2026: [2000, ...Array(11).fill(null)] } };
+  assert.equal(getTargets(data, "MY", [2026]), null); // brand absent
+  assert.equal(getTargets(data, "SG", [2024]), null); // no matching year
+  const got = getTargets(data, "SG", [2025, 2026]);
+  assert.deepEqual(Object.keys(got), ["2025", "2026"]);
+  got[2025][0] = 9;
+  assert.equal(data.SG[2025][0], 1000); // copies, not references
+});
+
+test("the real checked-in CATEGORY_MAP and TARGETS pass validation", () => {
+  assert.equal(validateTargets(TARGETS), true);
+  assert.equal(typeof CATEGORY_MAP.fallback, "string");
+  assert.ok(CATEGORY_MAP.fallback.length > 0);
+  const seen = new Set();
+  for (const [prefix, cat] of Object.entries(CATEGORY_MAP.prefixes)) {
+    assert.ok(typeof cat === "string" && cat.length > 0, `prefix ${prefix} has an empty category`);
+    const up = prefix.toUpperCase();
+    assert.ok(!seen.has(up), `case-duplicate prefix key: ${prefix}`);
+    seen.add(up);
+  }
 });
 
 // ---- runner ----

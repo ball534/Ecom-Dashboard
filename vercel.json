@@ -1,7 +1,8 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "functions": {
-    "api/dashboard.js": { "maxDuration": 60 }
+    "api/dashboard.js": { "maxDuration": 60 },
+    "api/insights.js": { "maxDuration": 30 }
   },
   "rewrites": [
     { "source": "/", "destination": "/index.html" }
