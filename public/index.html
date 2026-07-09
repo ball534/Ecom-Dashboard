@@ -2299,7 +2299,13 @@
         "Linen Button Front Blouse":
           "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CB0000074H-BLUSH-3-copy.jpg?v=1731714671",
       };
+      // Live image URLs from /api/insights (bestSellers.images), keyed by brand →
+      // {productTitle: url}. Preferred over the hand-maintained IMG_* baselines,
+      // which only cover titles someone remembered to add.
+      const LIVE_IMG = {};
       function imgOf(n) {
+        const live = LIVE_IMG[state.brand];
+        if (live && live[n]) return live[n];
         return (
           ({ SG: IMG, MY: IMG_MY, TRTSG: IMG_TRTSG, TRTMY: IMG_TRTMY }[
             state.brand
@@ -2621,12 +2627,20 @@
             });
           }
         }
-        // ④ Top discount code by sales generated.
+        // ④ Top discount codes by sales generated.
         const codes = EX.discounts && EX.discounts.codes;
         if (codes && codes.length) {
-          const top = codes.slice().sort((a, b) => b.gross - a.gross)[0];
+          const top = codes
+            .slice()
+            .sort((a, b) => b.gross - a.gross)
+            .slice(0, 3);
           out.push({
-            t: `Top discount code: <b>${top.code}</b> — ${money(top.gross)} across ${int(top.orders)} orders (${money(top.discount)} given away).`,
+            t:
+              (top.length > 1 ? `Top discount codes: ` : `Top discount code: `) +
+              top
+                .map((c) => `<b>${c.code}</b> (${money(c.gross)} · ${int(c.orders)} orders)`)
+                .join(", ") +
+              ".",
             tone: "",
           });
         }
@@ -3921,6 +3935,11 @@
         }
         // Best sellers → PROD_<brand>[yr] {revenue, units}: [name, rev, units, orders, sku].
         const bs = sections && sections.bestSellers;
+        // Merge (not replace) live image URLs so titles resolved for an earlier date
+        // range keep their photos when the user switches ranges.
+        if (bs && bs.images) {
+          LIVE_IMG[brand] = Object.assign(LIVE_IMG[brand] || {}, bs.images);
+        }
         if (bs && bs.byTitle && bs.byTitle.length && PROD_MAP[brand]) {
           const rows = bs.byTitle.map(function (p) {
             return [p.title, p.gross, p.qty, p.orders || 0, "—"];
@@ -4013,16 +4032,32 @@
           banner +
           '<div class="tiles" id="discTiles"></div><div class="chart-box" style="height:clamp(240px,30vw,330px);margin-top:16px"><canvas id="discChart"></canvas></div><details class="tbl-fold"><summary>Show table ▾</summary><div class="tbl-wrap" style="margin-top:10px"><table id="discTable"></table></div></details>';
         const tl = document.getElementById("discTiles");
+        const top3 = rows.slice(0, 3);
         addTile(
           tl,
-          "Top Discount",
-          '<span style="font-size:' +
-            (best[0].length > 12 ? "14px" : "18px") +
-            '">' +
-            best[0] +
-            "</span> " +
-            TYPE_BADGE(best[4]),
-          moneyP(best[1]) + " · " + int(best[2]) + " orders",
+          "Top Discounts",
+          top3
+            .map(
+              (r, i) =>
+                '<div style="display:flex;align-items:baseline;gap:7px;min-width:0;font-size:14px;line-height:1.7">' +
+                '<span style="font-family:Archivo,sans-serif;font-size:10.5px;color:var(--muted);flex:none">' +
+                (i + 1) +
+                "</span>" +
+                '<span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="' +
+                r[0] +
+                '">' +
+                r[0] +
+                "</span>" +
+                '<span style="flex:none">' +
+                TYPE_BADGE(r[4]) +
+                "</span>" +
+                '<span style="margin-left:auto;flex:none;font-family:Archivo,sans-serif;font-size:11.5px;color:var(--muted)">' +
+                moneyP(r[1]) +
+                "</span>" +
+                "</div>",
+            )
+            .join(""),
+          "top " + top3.length + " by revenue · #1: " + int(best[2]) + " orders",
         );
         addTile(
           tl,

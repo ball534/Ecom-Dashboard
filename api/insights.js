@@ -14,7 +14,7 @@
 // Targets come from lib/targets.js (local data, no Shopify) and are served even when
 // the brand has no Shopify credentials.
 
-import { getConfig, shopifyQL, ShopifyError } from "./_shopify.js";
+import { getConfig, shopifyQL, fetchProductImagesByTitle, ShopifyError } from "./_shopify.js";
 import {
   INSIGHT_QUERIES,
   SKU_PULL_LIMIT,
@@ -148,6 +148,18 @@ export default async function handler(req, res) {
     const bySku = skuRows ? parseTopSkus(skuRows, limit) : null;
     const byTitle = rowsByKey.titleSales ? parseTopTitles(rowsByKey.titleSales, limit) : null;
 
+    // Best-effort image lookup for the top titles (the gallery's photos). Runs after
+    // the ShopifyQL pool so it never competes with the sales queries for cost budget.
+    let images = null;
+    if (byTitle && byTitle.length) {
+      try {
+        images = await fetchProductImagesByTitle(cfg, byTitle.map((p) => p.title));
+        metaSections.productImages = { ok: true, resolved: Object.keys(images).length };
+      } catch (e) {
+        metaSections.productImages = failInfo(e);
+      }
+    }
+
     let categories = null;
     if (skuRows) {
       categories = buildCategoryMix(skuRows, CATEGORY_MAP);
@@ -162,7 +174,7 @@ export default async function handler(req, res) {
 
     const sections = {
       // Composite sections are null only when ALL their sources failed.
-      bestSellers: bySku || byTitle ? { bySku, byTitle } : null,
+      bestSellers: bySku || byTitle ? { bySku, byTitle, images } : null,
       discounts: rowsByKey.discountCodes ? parseDiscountCodes(rowsByKey.discountCodes) : null,
       categories,
       traffic: referrers || orderReferrers || campaigns
@@ -194,7 +206,9 @@ export default async function handler(req, res) {
     // Only a fully successful payload is edge-cached, and briefly (5 min): caching a
     // partially throttled one would pin its missing sections on every visitor until
     // the cache expired.
-    const allOk = results.every((r) => r.status === "fulfilled");
+    const allOk =
+      results.every((r) => r.status === "fulfilled") &&
+      metaSections.productImages?.ok !== false;
     res.setHeader(
       "Cache-Control",
       allOk ? "public, s-maxage=300, stale-while-revalidate=600" : "no-store",

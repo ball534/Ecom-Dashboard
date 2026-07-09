@@ -188,6 +188,41 @@ query Orders($cursor: String, $q: String!) {
   }
 }`;
 
+// Resolve featured-image URLs for a set of product titles (the best-sellers list).
+// ShopifyQL's sales dataset returns only titles — no product IDs or images — so the
+// dashboard used to rely on hand-maintained title→URL maps that go stale. This does
+// the join server-side in ONE aliased GraphQL request. A `title:` search is a
+// substring match, so results are re-checked for an exact (case-insensitive) title
+// before an image is attached — a near-miss must not show the wrong product's photo.
+// Returns { "<title>": "<url>", ... } (titles with no confident match are omitted).
+export async function fetchProductImagesByTitle(cfg, titles) {
+  const list = [...new Set((titles || []).filter(Boolean))].slice(0, 50);
+  if (!list.length) return {};
+  const vars = {};
+  const parts = list.map((t, i) => {
+    // JSON.stringify wraps the title in double quotes (a phrase match in Shopify's
+    // search syntax) and escapes any quotes inside it.
+    vars["q" + i] = "title:" + JSON.stringify(t);
+    return `p${i}: products(first: 5, query: $q${i}) { edges { node { title featuredImage { url } } } }`;
+  });
+  const query =
+    `query ProductImages(${list.map((_, i) => `$q${i}: String!`).join(", ")}) { ${parts.join(" ")} }`;
+  const data = await shopifyGraphQL(cfg, query, vars);
+  const norm = (s) => String(s || "").trim().toLowerCase();
+  const out = {};
+  list.forEach((t, i) => {
+    const edges = data?.["p" + i]?.edges || [];
+    const hit =
+      edges.find((e) => norm(e?.node?.title) === norm(t)) ||
+      (edges.length === 1 ? edges[0] : null);
+    const url = hit?.node?.featuredImage?.url;
+    // Originals can be multi-MB; Shopify's CDN resizes on the fly via ?width=.
+    // 600px comfortably covers the gallery card at 2x density.
+    if (url) out[t] = url + (url.includes("?") ? "&" : "?") + "width=600";
+  });
+  return out;
+}
+
 // Page through all orders matching a created_at window, returning normalized records.
 // `maxPages` is a safety cap (250 orders/page). For very large multi-year pulls,
 // swap this for a Bulk Operation (see README) — the aggregation logic is unchanged.
