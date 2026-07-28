@@ -128,13 +128,38 @@ request is in flight, the live metrics show **dashes**, so it's always clear whe
 has loaded. Selecting a range that spans prior years pulls those live too (the token has
 `read_all_orders`), though new-vs-returning is only accurate for the current year — see the caveat below.
 
+## Shopify scopes required
+
+Read-only. Every scope below is traceable to a specific call in `api/_shopify.js`:
+
+| Scope | Needed for |
+|---|---|
+| `read_reports` | `shopifyqlQuery` — all the `FROM sales` / `FROM sessions` / `FROM fulfillments` queries in `lib/shopifyql.js` and `lib/insights.js` |
+| `read_analytics` | the `FROM sessions` datasets (sessions, conversion_rate, referrer_source, utm_campaign) |
+| `read_orders` | `fetchOrders()` — Units, Voucher, New/Returning, and the sales fallback path |
+| `read_all_orders` | without it the Orders path only reaches back **60 days**. Requires Shopify approval |
+| `read_customers` | `customer { id numberOfOrders }` in `ORDERS_QUERY` — drives new-vs-returning |
+| `read_products` | `fetchProductImagesByTitle()` — best-seller thumbnails via `products(query: "title:…")` |
+
+```
+read_reports, read_analytics, read_orders, read_all_orders, read_customers, read_products
+```
+
+Plus **protected customer data** access, requested inside the app config — it is *not* a
+scope checkbox, and `read_customers` alone won't return customer fields without it. Denial
+degrades gracefully: `ShopifyError` with `reason: "scope"` and the panel shows dashes.
+
+`rights.md` records the full scope list currently granted on the store; it is a superset of
+the above (most of it is unused by this repo). Note that `FROM fulfillments` goes through
+ShopifyQL/`read_reports` — the fulfillment scopes are **not** needed. Neither is
+`read_discounts`: discount-code performance also comes from ShopifyQL.
+
 ### Getting a working token (`shpat_`)
 
 1. In the **iORA SG** Shopify admin: **Settings → Apps and sales channels → Develop apps**.
 2. **Create an app** (e.g. "Dashboard Read").
-3. **Configure Admin API scopes**: enable `read_orders` and `read_products`. For data older
-   than 60 days also request **`read_all_orders`** (Shopify approval required). For new-vs-
-   returning customers you may need **protected customer data** access (request in the app).
+3. **Configure Admin API scopes**: enable the six listed above, then request **protected
+   customer data** access in the same app config.
 4. **Install app**, then **reveal the Admin API access token** — it starts with `shpat_`.
 5. Put it in `.env` as `SHOPIFY_TOKEN` (and in Vercel env vars for production).
 6. Confirm the store domain in `SHOPIFY_STORE_DOMAIN` (auto-detected: `iora-online.myshopify.com`).
