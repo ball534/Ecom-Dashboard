@@ -219,6 +219,12 @@ Resolved by `getConfig()` in `api/_shopify.js`. Notes:
   `reason: "not-configured"`, that store's figures stay blank (dashes), and it drops out of
   the SG/MY/Group roll-ups — quietly, with no warning banner. Setting a wrong or
   placeholder value is worse: the store counts as live and fails on auth.
+- The two values are easy to enter the wrong way round. `getConfig()` recognises a
+  transposed pair (a `<handle>.myshopify.com` in `TOKEN_*` and a `shp…_` token in
+  `DOMAIN_*`), reads it swapped so live data still loads, and logs a one-line warning
+  naming the pair. Transpose the values in `.env`/Vercel to clear the warning — without
+  the guard the token is used as a hostname and the store fails with the misleading
+  `reason: "http"` ("Network error reaching Shopify").
 - Legacy names are still accepted as a fallback so an existing deployment keeps working:
   `SHOPIFY_TOKEN`/`SHOPIFY_KEY` + `SHOPIFY_STORE_DOMAIN` for iORA SG, and
   `SHOPIFY_TOKEN_<BRAND>` + `SHOPIFY_DOMAIN_<BRAND>`/`SHOPIFY_STORE_DOMAIN_<BRAND>` for the

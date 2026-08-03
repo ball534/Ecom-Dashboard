@@ -41,6 +41,7 @@ import {
 } from "../lib/insights.js";
 import { CATEGORY_MAP } from "../lib/category-map.js";
 import { TARGETS, validateTargets, getTargets } from "../lib/targets.js";
+import { getConfig, envNames } from "../api/_shopify.js";
 
 let passed = 0;
 const tests = [];
@@ -508,6 +509,52 @@ test("the real checked-in CATEGORY_MAP and TARGETS pass validation", () => {
     assert.ok(!seen.has(up), `case-duplicate prefix key: ${prefix}`);
     seen.add(up);
   }
+});
+
+// ---- store credentials (getConfig) ----
+
+test("getConfig reads TOKEN_/DOMAIN_ per store, maps SG/MY to the iORA suffixes", () => {
+  const env = {
+    TOKEN_IORASG: "shpat_" + "a".repeat(32),
+    DOMAIN_IORASG: "iora-sg.myshopify.com",
+    TOKEN_MONOMY: "shpat_" + "b".repeat(32),
+    DOMAIN_MONOMY: "https://monoloq-my.myshopify.com/admin",
+  };
+  assert.deepEqual(envNames("SG"), { token: "TOKEN_IORASG", domain: "DOMAIN_IORASG" });
+  assert.deepEqual(envNames("MY"), { token: "TOKEN_IORAMY", domain: "DOMAIN_IORAMY" });
+  assert.deepEqual(envNames("TRTSG"), { token: "TOKEN_TRTSG", domain: "DOMAIN_TRTSG" });
+
+  const sg = getConfig(env, "SG");
+  assert.equal(sg.token, env.TOKEN_IORASG);
+  assert.equal(sg.domain, "iora-sg.myshopify.com");
+
+  // Scheme + path are stripped from the domain.
+  assert.equal(getConfig(env, "MONOMY").domain, "monoloq-my.myshopify.com");
+
+  // A store with no pair set stays empty, so the API reports "not-configured".
+  const blank = getConfig(env, "TRTSG");
+  assert.equal(blank.token, "");
+  assert.equal(blank.domain, "");
+});
+
+test("getConfig corrects a transposed TOKEN_/DOMAIN_ pair instead of failing as a network error", () => {
+  const token = "shpat_" + "c".repeat(32);
+  // The pair entered the wrong way round — the mistake that blanked the dashboard.
+  const env = { TOKEN_IORASG: "iora-sg.myshopify.com", DOMAIN_IORASG: token };
+  const warn = console.warn;
+  console.warn = () => {}; // the fix logs once; keep the test output clean
+  try {
+    const cfg = getConfig(env, "SG");
+    assert.equal(cfg.token, token);
+    assert.equal(cfg.domain, "iora-sg.myshopify.com");
+  } finally {
+    console.warn = warn;
+  }
+
+  // Only an unambiguous transposition is corrected: one bad value alone is left as-is.
+  const half = getConfig({ TOKEN_IORASG: "iora-sg.myshopify.com", DOMAIN_IORASG: "" }, "SG");
+  assert.equal(half.token, "iora-sg.myshopify.com");
+  assert.equal(half.domain, "");
 });
 
 // ---- runner ----

@@ -38,6 +38,19 @@ export const envNames = (brand) => {
   return { token: `TOKEN_${s}`, domain: `DOMAIN_${s}` };
 };
 
+// Shopify's two credentials have unmistakable, non-overlapping shapes: an Admin API
+// access token is `shp<xx>_…`, a store domain is `<handle>.myshopify.com`. So a pair
+// that has been entered the wrong way round — the domain pasted into TOKEN_<STORE> and
+// the token into DOMAIN_<STORE>, an easy slip when the vars sit next to each other —
+// can be recognised with certainty. Worth recognising, because otherwise the token is
+// used as a hostname: DNS can't resolve it, fetch throws, and the store reports the
+// generic reason "http" ("Network error reaching Shopify"), which points at the network
+// rather than at the two variables that are actually at fault.
+const looksLikeToken = (v) => /^shp[a-z]{2}_/i.test(v);
+const looksLikeDomain = (v) => /\.myshopify\.com$/i.test(v);
+// Warn at most once per store per process, so a per-request call site doesn't flood logs.
+const swapWarned = new Set();
+
 // Read + sanitize config from the environment, for a given brand/store.
 //
 // The TOKEN_/DOMAIN_ pair above is the canonical naming. The older SHOPIFY_-prefixed
@@ -65,7 +78,22 @@ export function getConfig(env = process.env, brand = "SG") {
       : strip(env["SHOPIFY_DOMAIN_" + B]) || strip(env["SHOPIFY_STORE_DOMAIN_" + B]);
   }
 
-  domain = domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  // Reduce a domain to a bare host first, so a pasted "https://<handle>.myshopify.com/admin"
+  // is still recognised as a domain whichever variable it landed in.
+  const bareHost = (v) => v.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
+  domain = bareHost(domain);
+  if (looksLikeDomain(bareHost(token)) && looksLikeToken(domain)) {
+    [token, domain] = [domain, bareHost(token)];
+    if (!swapWarned.has(S)) {
+      swapWarned.add(S);
+      console.warn(
+        `[shopify] TOKEN_${S} holds a store domain and DOMAIN_${S} holds an access token — ` +
+          `the pair is the wrong way round. Reading them swapped so live data still loads; ` +
+          `transpose the two values to clear this warning.`,
+      );
+    }
+  }
+
   const version =
     strip(env["SHOPIFY_API_VERSION_" + B]) || strip(env.SHOPIFY_API_VERSION) || DEFAULT_API_VERSION;
   return { token, domain, version, brand: B };
