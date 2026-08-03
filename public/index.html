@@ -811,13 +811,21 @@
         color: var(--green);
         font-weight: 600;
       }
-      /* Offline / baseline fallback. */
+      /* Live fetch failed (offline, auth, throttle) -> figures fall back to dashes. */
       .conn.failed .conn-fill,
       .conn.failed .conn-dot {
         background: var(--accent);
       }
       .conn.failed .conn-label {
         color: var(--accent);
+      }
+      /* Store deliberately not wired up (no credentials in .env) -> muted, not an error. */
+      .conn.unconfigured .conn-fill,
+      .conn.unconfigured .conn-dot {
+        background: var(--muted);
+      }
+      .conn.unconfigured .conn-label {
+        color: var(--muted);
       }
       /* Once connected for a moment, drop the bar and keep a steady green dot. */
       .conn.settled .conn-track {
@@ -7931,11 +7939,12 @@
       );
 
       /* ====================================================================
-         LIVE DATA OVERLAY — Shopify (iORA SG) via /api/dashboard
-         The dashboard renders immediately from its baseline data; when the
-         serverless endpoint returns live Shopify numbers we overwrite only the
-         months it provides (preserving baseline/Excel months and future nulls),
-         recompute the All-Brands/Group aggregates, then re-render.
+         LIVE DATA OVERLAY — Shopify, per store, via /api/dashboard
+         Every figure here is live: BRANDS starts all-null (dashes) and is filled
+         only by what the endpoint returns, so nothing is ever fabricated. A store
+         whose token/domain pair is blank in .env returns reason:"not-configured"
+         and is simply skipped — its months stay blank and it drops out of the
+         All-Brands/Group aggregates (aggBrand sums only non-null members).
          ==================================================================== */
       function rebuildAggs() {
         BRANDS.SGALL = makeAgg(
@@ -8041,7 +8050,10 @@
         rebuildAggs();
       }
 
-      // Put the original baseline back for the given years (used when live fails).
+      // Put the pre-fetch state back for the given years — used when a live load FAILS
+      // (offline / auth / throttle), never for an unconfigured store. Since BRANDS starts
+      // all-null, this restores dashes today; it exists so any future seeded history isn't
+      // clobbered by a failed fetch.
       function restoreBaseline(brand, years) {
         var snap = BASELINE[brand];
         if (!snap) return;
@@ -8241,7 +8253,10 @@
             label.textContent = "Connecting…";
           }
         }
-        function done(ok) {
+        // done(true)               -> connected, live figures on screen
+        // done(false, true)        -> store has no credentials in .env: muted, not an error
+        // done(false)              -> genuine failure (offline / auth / throttle)
+        function done(ok, unconfigured) {
           ensure();
           if (timer) { clearInterval(timer); timer = null; }
           if (ok) {
@@ -8250,10 +8265,15 @@
             fill.style.width = "100%";
             label.textContent = "Connected · live";
             setTimeout(function () { if (el) el.classList.add("settled"); }, 2400);
+          } else if (unconfigured) {
+            el.className = "conn unconfigured";
+            fill.style.width = "100%";
+            label.textContent = "Not set up · no data";
+            setTimeout(function () { if (el) el.classList.add("settled"); }, 2400);
           } else {
             el.className = "conn failed";
             fill.style.width = "100%";
-            label.textContent = "Offline · baseline";
+            label.textContent = "Offline · no data";
           }
         }
         return { start: start, done: done };
@@ -8327,18 +8347,24 @@
               }
             } else {
               info.ok = false;
-              restoreBaseline(brand, [2024, 2025, 2026]);
               var reason = payload && payload.meta ? payload.meta.reason : "unknown";
-              // "not-configured" is expected for stores without tokens yet — settle it so
-              // we don't retry, and keep the "soon" hint. Other reasons stay retryable.
-              info.settled = reason === "not-configured";
+              // "not-configured" = that store's token/domain pair is blank in .env, so it is
+              // deliberately skipped rather than broken: leave every live figure blank
+              // (dashes), settle it so we don't retry, and stay quiet — no warning banner.
+              // The brand keeps its "soon" hint and the connection chip reads "Not set up",
+              // so the reason is still discoverable. Other reasons are real failures: they
+              // stay retryable and keep the warning.
+              var unconfigured = reason === "not-configured";
+              if (unconfigured) blankLive(brand, [2024, 2025, 2026]);
+              else restoreBaseline(brand, [2024, 2025, 2026]);
+              info.settled = unconfigured;
               markBrandLive(brand, false);
               if (current) {
-                var msg = reason === "not-configured"
-                  ? "Live data not set up for " + BRANDS[brand].name + " — showing baseline."
-                  : "Live data unavailable (" + reason + ") — showing baseline.";
-                setLiveStatus(msg, "warn");
-                ConnIndicator.done(false);
+                setLiveStatus(
+                  unconfigured ? "" : "Live data unavailable (" + reason + ") — figures left blank.",
+                  unconfigured ? "" : "warn",
+                );
+                ConnIndicator.done(false, unconfigured);
               }
             }
             if (current) markComingSoonPanels(info.ok);
@@ -8349,7 +8375,7 @@
             restoreBaseline(brand, [2024, 2025, 2026]);
             markBrandLive(brand, false);
             if (current) {
-              setLiveStatus("Live data unavailable (offline) — showing baseline.", "warn");
+              setLiveStatus("Live data unavailable (offline) — figures left blank.", "warn");
               ConnIndicator.done(false);
             }
             reRender();
@@ -8423,8 +8449,11 @@
           LIVE_WIN[brand] =
             payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
           // A failed window fetch would otherwise silently show full-history
-          // figures under the new range's wording — say so instead.
-          if (!LIVE_WIN[brand] && brand === state.brand && payload && payload.meta && payload.meta.reason) {
+          // figures under the new range's wording — say so instead. An unconfigured
+          // store is not a failure: its full history is blank too, so there is
+          // nothing misleading to warn about.
+          if (!LIVE_WIN[brand] && brand === state.brand && payload && payload.meta &&
+              payload.meta.reason && payload.meta.reason !== "not-configured") {
             setLiveStatus(
               "Selected range unavailable (" + payload.meta.reason + ") — summary shows full-year figures.",
               "warn",

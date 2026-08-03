@@ -14,7 +14,7 @@
 // Targets come from lib/targets.js (local data, no Shopify) and are served even when
 // the brand has no Shopify credentials.
 
-import { getConfig, shopifyQL, fetchProductImagesByTitle, ShopifyError } from "./_shopify.js";
+import { getConfig, envNames, shopifyQL, fetchProductImagesByTitle, ShopifyError } from "./_shopify.js";
 import {
   INSIGHT_QUERIES,
   SKU_PULL_LIMIT,
@@ -120,8 +120,8 @@ export default async function handler(req, res) {
         brand,
         reason: "not-configured",
         message:
-          `No Shopify credentials configured for brand "${brand}". Set SHOPIFY_TOKEN_${brand} ` +
-          `and SHOPIFY_DOMAIN_${brand} in the Vercel project's Environment Variables.`,
+          `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).token} ` +
+          `and ${envNames(brand).domain} in the Vercel project's Environment Variables.`,
         sections: metaSections,
       },
     });

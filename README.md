@@ -161,8 +161,11 @@ ShopifyQL/`read_reports` — the fulfillment scopes are **not** needed. Neither 
 3. **Configure Admin API scopes**: enable the six listed above, then request **protected
    customer data** access in the same app config.
 4. **Install app**, then **reveal the Admin API access token** — it starts with `shpat_`.
-5. Put it in `.env` as `SHOPIFY_TOKEN` (and in Vercel env vars for production).
-6. Confirm the store domain in `SHOPIFY_STORE_DOMAIN` (auto-detected: `iora-online.myshopify.com`).
+5. Put it in `.env` as `TOKEN_IORASG` (and in Vercel env vars for production).
+6. Confirm the store domain in `DOMAIN_IORASG` (auto-detected: `iora-online.myshopify.com`).
+
+Repeat per store, using that store's own admin and its `TOKEN_*`/`DOMAIN_*` pair from the
+table below.
 
 ## Setup & run
 
@@ -170,8 +173,8 @@ ShopifyQL/`read_reports` — the fulfillment scopes are **not** needed. Neither 
 # 1. Install Vercel CLI (only needed for local dev / deploy)
 npm i -g vercel
 
-# 2. Configure secrets (already scaffolded in .env — replace the token)
-#    SHOPIFY_TOKEN, SHOPIFY_STORE_DOMAIN, SHOPIFY_API_VERSION
+# 2. Configure secrets: cp .env.example .env, then fill in the 17 keys
+#    (one SHOPIFY_API_VERSION + a token/domain pair per store)
 
 # 3. Check the token authenticates
 npm run verify-token
@@ -188,8 +191,40 @@ vercel            # preview
 vercel --prod     # production
 ```
 
-On Vercel, set `SHOPIFY_TOKEN`, `SHOPIFY_STORE_DOMAIN`, `SHOPIFY_API_VERSION` under
-**Project → Settings → Environment Variables**. **Never commit `.env`** (it is gitignored).
+### Environment variables
+
+All eight stores share one Admin API version; each store has its own token + permanent
+domain. Set these under **Project → Settings → Environment Variables** on Vercel (and in
+`.env` locally — see `.env.example` for the annotated template).
+
+| Variable | Store | Brand key |
+| --- | --- | --- |
+| `SHOPIFY_API_VERSION` | shared by all stores (`2025-10`) | — |
+| `TOKEN_IORASG` / `DOMAIN_IORASG` | iORA SG | `SG` |
+| `TOKEN_IORAMY` / `DOMAIN_IORAMY` | iORA MY | `MY` |
+| `TOKEN_TRTSG` / `DOMAIN_TRTSG` | The Restyle Trait SG | `TRTSG` |
+| `TOKEN_TRTMY` / `DOMAIN_TRTMY` | The Restyle Trait MY | `TRTMY` |
+| `TOKEN_SANSSG` / `DOMAIN_SANSSG` | SANS & SANS SG | `SANSSG` |
+| `TOKEN_SANSMY` / `DOMAIN_SANSMY` | SANS & SANS MY | `SANSMY` |
+| `TOKEN_MONOSG` / `DOMAIN_MONOSG` | MONOLOQ SG | `MONOSG` |
+| `TOKEN_MONOMY` / `DOMAIN_MONOMY` | MONOLOQ MY | `MONOMY` |
+
+Resolved by `getConfig()` in `api/_shopify.js`. Notes:
+
+- The **brand key** is the dashboard's internal id (`/api/dashboard?brand=SG`). It matches
+  the env suffix for every store except the two iORA ones: brand `SG` → `TOKEN_IORASG`,
+  brand `MY` → `TOKEN_IORAMY`.
+- **Domain** = the store's permanent `<handle>.myshopify.com`, *not* the public storefront.
+- A store whose pair is left **empty** is skipped: `/api/dashboard` returns
+  `reason: "not-configured"`, that store's figures stay blank (dashes), and it drops out of
+  the SG/MY/Group roll-ups — quietly, with no warning banner. Setting a wrong or
+  placeholder value is worse: the store counts as live and fails on auth.
+- Legacy names are still accepted as a fallback so an existing deployment keeps working:
+  `SHOPIFY_TOKEN`/`SHOPIFY_KEY` + `SHOPIFY_STORE_DOMAIN` for iORA SG, and
+  `SHOPIFY_TOKEN_<BRAND>` + `SHOPIFY_DOMAIN_<BRAND>`/`SHOPIFY_STORE_DOMAIN_<BRAND>` for the
+  rest. A single store can override the shared version with `SHOPIFY_API_VERSION_<BRAND>`.
+
+**Never commit `.env`** (it is gitignored).
 
 ## Verification checklist
 

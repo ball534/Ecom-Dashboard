@@ -17,7 +17,7 @@
 //   • vou                              — Orders API (gift-card/store-credit orders; ShopifyQL
 //     has no clean column for this).
 
-import { getConfig, fetchOrders, shopifyQL, ShopifyError } from "./_shopify.js";
+import { getConfig, envNames, fetchOrders, shopifyQL, ShopifyError } from "./_shopify.js";
 import { bucketOrders, monthsWithData, emptyYear, ORDER_METRICS } from "../lib/aggregate.js";
 import {
   buildSalesQL,
@@ -71,8 +71,9 @@ export default async function handler(req, res) {
   const cfg = getConfig(process.env, brand);
 
   // A brand with no token/domain configured isn't an error — it just isn't wired up yet.
-  // Report it plainly so the front-end keeps that brand on its baseline data instead of
-  // showing a scary failure. (SG is always configured on this deployment.)
+  // Report it plainly (200 + reason) so the front-end skips that store quietly, leaving
+  // its figures blank, instead of showing a failure. Distinct from a real credential
+  // problem, which throws below and IS surfaced as a warning.
   if (!cfg.token || !cfg.domain || cfg.domain === "your-store.myshopify.com") {
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
@@ -82,8 +83,8 @@ export default async function handler(req, res) {
         brand,
         reason: "not-configured",
         message:
-          `No Shopify credentials configured for brand "${brand}". Set SHOPIFY_TOKEN_${brand} ` +
-          `and SHOPIFY_DOMAIN_${brand} in the Vercel project's Environment Variables.`,
+          `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).token} ` +
+          `and ${envNames(brand).domain} in the Vercel project's Environment Variables.`,
       },
     });
   }
@@ -194,7 +195,8 @@ export default async function handler(req, res) {
           message:
             shopifyqlMessage ||
             "The API responded but returned no live figures. On Vercel this usually means " +
-              "SHOPIFY_TOKEN / SHOPIFY_STORE_DOMAIN are not set in the project's Environment Variables.",
+              `${envNames(brand).token} / ${envNames(brand).domain} are not set in the ` +
+              "project's Environment Variables.",
           apiVersion: cfg.version,
           salesSource,
           sessionsLive,

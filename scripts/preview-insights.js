@@ -11,7 +11,7 @@
 //   (feeds the future product_type merge decision).
 
 import { loadEnv } from "./_env.js";
-import { getConfig, shopifyQL, ShopifyError } from "../api/_shopify.js";
+import { getConfig, envNames, shopifyQL, ShopifyError } from "../api/_shopify.js";
 import {
   INSIGHT_QUERIES,
   SKU_PULL_LIMIT,
@@ -37,7 +37,7 @@ const LIMIT = 10;
 
 const cfg = getConfig(process.env, brand);
 if (!cfg.token || !cfg.domain) {
-  console.log(`Brand ${brand} is not configured (no token/domain). Set SHOPIFY_TOKEN_${brand} / SHOPIFY_DOMAIN_${brand}.`);
+  console.log(`Brand ${brand} is not configured (no token/domain). Set ${envNames(brand).token} / ${envNames(brand).domain}.`);
   process.exit(1);
 }
 

@@ -19,28 +19,52 @@ export class ShopifyError extends Error {
   }
 }
 
+// Multi-store: each brand button on the dashboard is backed by its own Shopify store, so
+// it needs its own Admin API token + permanent domain. Each store is one pair of env vars
+// (see .env.example):
+//   TOKEN_<STORE>   (e.g. TOKEN_IORASG, TOKEN_TRTMY)
+//   DOMAIN_<STORE>  (e.g. DOMAIN_IORASG = iora-online.myshopify.com)
+// The store suffix differs from the dashboard's internal brand key for the two iORA
+// stores: brand SG -> TOKEN_IORASG, brand MY -> TOKEN_IORAMY. Everything else matches.
+const ENV_SUFFIX = { SG: "IORASG", MY: "IORAMY" };
+export const envSuffix = (brand) => {
+  const B = String(brand || "SG").toUpperCase();
+  return ENV_SUFFIX[B] || B;
+};
+// Names for this store's pair, used in "not configured" messages so they point at the
+// exact variable to set.
+export const envNames = (brand) => {
+  const s = envSuffix(brand);
+  return { token: `TOKEN_${s}`, domain: `DOMAIN_${s}` };
+};
+
 // Read + sanitize config from the environment, for a given brand/store.
 //
-// Multi-store: each brand button on the dashboard is backed by its own Shopify store,
-// so it needs its own Admin API token + permanent domain. To add a store live you set,
-// in Vercel, a pair of env vars named after the brand key:
-//   SHOPIFY_TOKEN_<BRAND>   (e.g. SHOPIFY_TOKEN_MY, SHOPIFY_TOKEN_TRTSG)
-//   SHOPIFY_DOMAIN_<BRAND>  (e.g. SHOPIFY_DOMAIN_MY  = iora-my.myshopify.com)
-// SG keeps the original unsuffixed names (SHOPIFY_TOKEN / SHOPIFY_STORE_DOMAIN) so
-// nothing about the existing deployment changes. API version is shared unless a brand
-// overrides it with SHOPIFY_API_VERSION_<BRAND>.
+// The TOKEN_/DOMAIN_ pair above is the canonical naming. The older SHOPIFY_-prefixed
+// names are still accepted as a fallback so an existing deployment (whose Vercel env
+// vars predate the rename) keeps working untouched. API version is shared by every
+// store via SHOPIFY_API_VERSION, unless one overrides it with SHOPIFY_API_VERSION_<KEY>.
 export function getConfig(env = process.env, brand = "SG") {
   const strip = (s) => (s || "").trim().replace(/^['"]|['"]$/g, "");
   const B = String(brand || "SG").toUpperCase();
-  let token, domain;
-  if (B === "SG") {
-    token = strip(env.SHOPIFY_TOKEN) || strip(env.SHOPIFY_KEY); // original .env key name
-    domain = strip(env.SHOPIFY_STORE_DOMAIN);
-  } else {
-    token = strip(env["SHOPIFY_TOKEN_" + B]);
-    // accept either SHOPIFY_DOMAIN_<B> or SHOPIFY_STORE_DOMAIN_<B>
-    domain = strip(env["SHOPIFY_DOMAIN_" + B]) || strip(env["SHOPIFY_STORE_DOMAIN_" + B]);
+  const S = envSuffix(B);
+
+  // Canonical: TOKEN_<STORE> / DOMAIN_<STORE>.
+  let token = strip(env["TOKEN_" + S]);
+  let domain = strip(env["DOMAIN_" + S]);
+
+  // Legacy fallbacks (unsuffixed for SG, SHOPIFY_*_<BRAND> for the rest).
+  if (!token) {
+    token = B === "SG"
+      ? strip(env.SHOPIFY_TOKEN) || strip(env.SHOPIFY_KEY)
+      : strip(env["SHOPIFY_TOKEN_" + B]);
   }
+  if (!domain) {
+    domain = B === "SG"
+      ? strip(env.SHOPIFY_STORE_DOMAIN)
+      : strip(env["SHOPIFY_DOMAIN_" + B]) || strip(env["SHOPIFY_STORE_DOMAIN_" + B]);
+  }
+
   domain = domain.replace(/^https?:\/\//, "").replace(/\/.*$/, "");
   const version =
     strip(env["SHOPIFY_API_VERSION_" + B]) || strip(env.SHOPIFY_API_VERSION) || DEFAULT_API_VERSION;
@@ -56,10 +80,10 @@ const THROTTLE_RETRIES = 2;
 
 export async function shopifyGraphQL(cfg, query, variables = {}, _attempt = 0) {
   if (!cfg.domain || cfg.domain === "your-store.myshopify.com") {
-    throw new ShopifyError("no-domain", "SHOPIFY_STORE_DOMAIN is not set");
+    throw new ShopifyError("no-domain", `${envNames(cfg.brand).domain} is not set`);
   }
   if (!cfg.token) {
-    throw new ShopifyError("no-token", "SHOPIFY_TOKEN is not set");
+    throw new ShopifyError("no-token", `${envNames(cfg.brand).token} is not set`);
   }
 
   const url = `https://${cfg.domain}/admin/api/${cfg.version}/graphql.json`;
