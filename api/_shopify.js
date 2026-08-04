@@ -14,7 +14,7 @@ export class ShopifyError extends Error {
   constructor(reason, message, status) {
     super(message || reason);
     this.name = "ShopifyError";
-    this.reason = reason; // no-token | no-domain | auth | scope | throttle | http | graphql
+    this.reason = reason; // no-token | no-domain | auth | scope | throttle | http | graphql | timeout
     this.status = status;
   }
 }
@@ -212,12 +212,28 @@ export async function shopifyQL(cfg, ql) {
   return { columns, rows };
 }
 
-// first:100 keeps the GraphQL cost under the cap now that we read per-line
-// originalTotal + taxLines + discountAllocations (to reconstruct Shopify's
-// tax-EXCLUDED Gross Sales and Discounts exactly as the Analytics report does).
-const ORDERS_QUERY = (includeCustomer) => `
+// first:250 (the connection maximum). Measured live with the full field set below:
+// requestedQueryCost 464, actualQueryCost 51 against a 20,000-point bucket and the
+// 1,000-point single-query cap — big pages cost almost nothing extra, and a
+// year-scale pull drops from ~94 round trips to ~38, which is what keeps the FULL
+// /api/dashboard mode inside a serverless time limit. The per-line fields
+// (originalTotal + taxLines + discountAllocations) reconstruct Shopify's
+// tax-EXCLUDED Gross Sales and Discounts exactly as the Analytics report does.
+//
+// The extra per-order fields feed the order-derived insight sections:
+//   • shippingLine.title       — pickup-vs-delivery discriminator ("Pick Up @ <store> (...)").
+//   • shippingAddress.zip      — delivery postal district (first 2 digits, aggregated
+//     server-side; the raw zip never leaves normalizeOrder). This is PROTECTED customer
+//     data on some tokens, so it is independently droppable (`includeShipAddress`) —
+//     a scope denial degrades to pickup-split-without-regions instead of failing the pull.
+//   • lineItems sku + variant.id — sale-vs-full-price classification (variant ids are
+//     joined against current compareAtPrice via fetchVariantCompareAt). The sold unit
+//     price is DERIVED as originalTotal/quantity rather than requesting
+//     originalUnitPriceSet — identical value, zero extra query cost (measured live:
+//     requestedQueryCost 380 per page against the 20,000-point bucket).
+const ORDERS_QUERY = (includeCustomer, includeShipAddress = true) => `
 query Orders($cursor: String, $q: String!) {
-  orders(first: 100, after: $cursor, query: $q, sortKey: CREATED_AT) {
+  orders(first: 250, after: $cursor, query: $q, sortKey: CREATED_AT) {
     pageInfo { hasNextPage endCursor }
     edges {
       node {
@@ -226,9 +242,13 @@ query Orders($cursor: String, $q: String!) {
         cancelledAt
         taxesIncluded
         paymentGatewayNames
+        shippingLine { title }
+        ${includeShipAddress ? "shippingAddress { zip }" : ""}
         lineItems(first: 100) {
           edges { node {
             quantity
+            sku
+            variant { id }
             originalTotalSet { shopMoney { amount } }
             taxLines { rate }
             discountAllocations { allocatedAmountSet { shopMoney { amount } } }
@@ -278,9 +298,15 @@ export async function fetchProductImagesByTitle(cfg, titles) {
 // Page through all orders matching a created_at window, returning normalized records.
 // `maxPages` is a safety cap (250 orders/page). For very large multi-year pulls,
 // swap this for a Bulk Operation (see README) — the aggregation logic is unchanged.
-export async function fetchOrders(cfg, { start, end, includeCustomer = true, maxPages = 400 } = {}) {
+// `includeCustomer` and `includeShipAddress` are independent protected-data switches:
+// api/dashboard.js drops them one at a time when Shopify denies the scope, so a token
+// without protected-customer-data approval still gets everything the token CAN serve.
+export async function fetchOrders(
+  cfg,
+  { start, end, includeCustomer = true, includeShipAddress = true, maxPages = 400 } = {},
+) {
   const q = `created_at:>=${start} created_at:<=${end}`;
-  const query = ORDERS_QUERY(includeCustomer);
+  const query = ORDERS_QUERY(includeCustomer, includeShipAddress);
   const orders = [];
   let cursor = null;
   let pages = 0;
@@ -301,4 +327,50 @@ export async function fetchOrders(cfg, { start, end, includeCustomer = true, max
   } while (cursor && pages < maxPages);
 
   return { orders, truncated: Boolean(cursor), pages };
+}
+
+// Current catalogue price + compareAtPrice for a set of variant GIDs, via GraphQL
+// `nodes(ids: [...])` — the join that classifies an order line as sale vs full-price
+// (a line is "sale" iff the variant's compareAtPrice is above the sold unit price).
+// Chunked at Shopify's 250-ids-per-call limit; a deleted variant comes back as a null
+// node and is simply omitted from the Map (callers then classify it as full/unknown).
+// Throttle retries come for free via shopifyGraphQL.
+// Returns Map(variantId -> { price, compareAtPrice }) — both raw strings or null.
+const VARIANT_COMPARE_AT_QUERY = `
+query VariantCompareAt($ids: [ID!]!) {
+  nodes(ids: $ids) {
+    ... on ProductVariant { id price compareAtPrice }
+  }
+}`;
+
+export async function fetchVariantCompareAt(cfg, variantIds, { timeBudgetMs = 0 } = {}) {
+  const ids = [...new Set((variantIds || []).filter(Boolean))];
+  const out = new Map();
+  const startedAt = Date.now();
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += 250) chunks.push(ids.slice(i, i + 250));
+  // Two chunks in flight (nodes() queries are cheap — actualQueryCost ~2/id-batch —
+  // so a pair never dents the cost bucket, but halves the wall-clock of the lookup).
+  const WIDTH = 2;
+  for (let i = 0; i < chunks.length; i += WIDTH) {
+    // A year-scale pull can see tens of thousands of distinct variants (~40+ chunks).
+    // The caller runs inside a serverless function with a hard 60s ceiling, so it can
+    // set a budget: better to fail THIS section cleanly (retryable, uncached) than to
+    // time the whole payload out and lose the metrics that already loaded.
+    if (timeBudgetMs > 0 && Date.now() - startedAt > timeBudgetMs) {
+      throw new ShopifyError(
+        "timeout",
+        `compareAt lookup exceeded its ${timeBudgetMs}ms budget after ${i} of ${chunks.length} chunks`,
+      );
+    }
+    const results = await Promise.all(
+      chunks.slice(i, i + WIDTH).map((c) => shopifyGraphQL(cfg, VARIANT_COMPARE_AT_QUERY, { ids: c })),
+    );
+    for (const data of results) {
+      for (const n of data?.nodes ?? []) {
+        if (n?.id) out.set(n.id, { price: n.price ?? null, compareAtPrice: n.compareAtPrice ?? null });
+      }
+    }
+  }
+  return out;
 }

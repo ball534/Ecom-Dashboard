@@ -1,6 +1,7 @@
 // scripts/preview-insights.js
-// Prints the LIVE insight sections (best sellers, discount codes, category mix,
-// traffic attribution, targets) exactly as /api/insights computes them, so you can
+// Prints the LIVE insight sections (best sellers, discount codes + monthly rows,
+// category mix, traffic attribution + monthly referrers + landing pages, funnel,
+// voucher report, targets) exactly as /api/insights computes them, so you can
 // eyeball them against the Shopify admin — and see which SKU prefixes still need
 // adding to lib/category-map.js.
 //
@@ -18,9 +19,14 @@ import {
   parseTopSkus,
   parseTopTitles,
   parseDiscountCodes,
+  parseDiscountMonthly,
   parseReferrers,
   parseOrderReferrers,
   parseCampaigns,
+  parseFunnel,
+  parseTrafficMonthly,
+  parseLandingPages,
+  buildVoucherReport,
   buildCategoryMix,
 } from "../lib/insights.js";
 import { CATEGORY_MAP } from "../lib/category-map.js";
@@ -120,6 +126,49 @@ if (rowsByKey.campaigns) {
   table(`Top ${LIMIT} UTM campaigns (sessions)`, parseCampaigns(rowsByKey.campaigns, LIMIT), [
     ["Campaign", 44, "campaign"], ["Sessions", -10, "sessions", f],
   ]);
+}
+if (rowsByKey.funnel) {
+  const fun = parseFunnel(rowsByKey.funnel) || {};
+  for (const [y, d] of Object.entries(fun)) {
+    console.log(`\n── Funnel ${y} (cart adds / reached checkout / completed) ${"─".repeat(12)}`);
+    console.log("   " + d.cart.map((c, i) => (c == null ? "–" : `${i + 1}:${f(c)}/${f(d.checkout[i])}/${f(d.converted[i])}`)).filter((s) => s !== "–").join("  "));
+  }
+}
+if (rowsByKey.discountMonthly) {
+  const dm = parseDiscountMonthly(rowsByKey.discountMonthly) || {};
+  for (const [y, months] of Object.entries(dm)) {
+    const last = months.reduce((t, m, i) => (m ? i : t), -1);
+    if (last < 0) continue;
+    table(`Discount rows ${y}-${String(last + 1).padStart(2, "0")} (latest month with rows)`,
+      months[last].map(([name, rev, orders, given, type]) => ({ name, rev, orders, given, type })), [
+      ["Name", 24, "name"], ["Revenue", -12, "rev", f], ["Orders", -7, "orders", f],
+      ["Given", -10, "given", f], ["Type", 5, "type"],
+    ]);
+  }
+}
+if (rowsByKey.trafficMonthly) {
+  const by = parseTrafficMonthly(rowsByKey.trafficMonthly) || {};
+  for (const [y, d] of Object.entries(by)) {
+    table(`Sessions by referrer name ${y} (top + Other)`, d.sources.map(([name, sessions]) => ({ name, sessions })), [
+      ["Referrer", 20, "name"], ["Sessions", -10, "sessions", f],
+    ]);
+    console.log(`   months with data: ${Object.keys(d.monthly).map((m) => +m + 1).join(", ")}`);
+  }
+}
+if (rowsByKey.landing) {
+  table("Top landing pages (sessions)", parseLandingPages(rowsByKey.landing).map(([path, sessions]) => ({ path, sessions })), [
+    ["Path", 44, "path"], ["Sessions", -10, "sessions", f],
+  ]);
+}
+if (rowsByKey.discountCodes) {
+  const v = buildVoucherReport(rowsByKey.discountCodes, rowsByKey.discountMonthly);
+  if (v) {
+    console.log(`\n── Voucher report — store actual ${f(v.store.actual)}, AOV ${f(v.store.aov)} ${"─".repeat(8)}`);
+    table(`Voucher rows (top ${LIMIT} of ${v.rows.length} by sales)`, v.rows.slice(0, LIMIT), [
+      ["Title", 24, "title"], ["Date", 12, "date"], ["Sales", -12, "sales", f], ["AOV", -8, "aov", f],
+      ["Disc", -10, "disc", f], ["Disc%", -6, "discPct", f], ["Redeemed", -9, "redeemed", f],
+    ]);
+  }
 }
 
 const years = [];

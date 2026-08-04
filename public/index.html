@@ -233,24 +233,21 @@
   #liveStatus{font-size:11px;color:var(--muted)}
   #liveStatus.ok{color:var(--green)}
   #liveStatus.warn{color:var(--accent)}
-  .conn{display:inline-flex;align-items:center;gap:8px;font-size:11px;color:var(--muted)}
-  .conn-dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none;transition:background .3s ease,box-shadow .3s ease}
-  .conn-track{width:130px;height:5px;border-radius:999px;background:var(--accent-soft);overflow:hidden;position:relative}
-  .conn-fill{height:100%;width:0;border-radius:999px;background:var(--accent);transition:width .2s linear,background .3s ease}
+  /* Connection chip: one dot element that spins amber while connecting (and while
+     retrying after a failure) and goes solid green once live data lands. */
+  .conn{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);--conn-amber:#C87A2B}
+  .conn-dot{width:10px;height:10px;border-radius:50%;background:var(--muted);flex:none;box-sizing:border-box;border:0 solid transparent;transition:background .3s ease}
   .conn-label{white-space:nowrap}
-  .conn.indeterminate .conn-fill{width:40%;transition:none;animation:connSweep 1.1s ease-in-out infinite}
-  @keyframes connSweep{0%{margin-left:-40%}100%{margin-left:100%}}
-  .conn.indeterminate .conn-dot{animation:connPulse 1.1s ease-in-out infinite}
-  @keyframes connPulse{0%,100%{opacity:.35}50%{opacity:1}}
-  .conn.connected .conn-fill,.conn.connected .conn-dot{background:var(--green)}
-  .conn.connected .conn-dot{animation:connGlow 1.8s ease-out infinite}
+  .conn.connecting .conn-dot{background:transparent;border-width:2px;border-style:solid;border-color:var(--accent-soft);border-top-color:var(--conn-amber);animation:connSpin .7s linear infinite}
+  @keyframes connSpin{to{transform:rotate(360deg)}}
+  .conn.connecting .conn-label{color:var(--conn-amber)}
+  .conn.connected .conn-dot{background:var(--green);animation:connGlow 1.8s ease-out infinite}
   @keyframes connGlow{0%{box-shadow:0 0 0 0 rgba(31,122,61,.5)}70%{box-shadow:0 0 0 7px rgba(31,122,61,0)}100%{box-shadow:0 0 0 0 rgba(31,122,61,0)}}
   .conn.connected .conn-label{color:var(--green);font-weight:600}
-  .conn.failed .conn-fill,.conn.failed .conn-dot{background:var(--accent)}
-  .conn.failed .conn-label{color:var(--accent)}
-  .conn.unconfigured .conn-fill,.conn.unconfigured .conn-dot{background:var(--muted)}
+  .conn.unconfigured .conn-dot{background:var(--muted)}
   .conn.unconfigured .conn-label{color:var(--muted)}
-  .conn.settled .conn-track{display:none}
+  @media (prefers-reduced-motion:reduce){.conn.connecting .conn-dot{animation-duration:2s}.conn.connected .conn-dot{animation:none}}
+  .kpi .sk-line{display:inline-block;width:74px;height:13px;border-radius:7px;vertical-align:middle;background:linear-gradient(100deg,var(--paper2) 30%,var(--line) 50%,var(--paper2) 70%);background-size:220% 100%;animation:shimmer 1.5s ease-in-out infinite}
 </style>
 </head>
 <body>
@@ -407,7 +404,7 @@
   </div><!-- /salesTab -->
   <div id="adsTab" style="display:none"></div>
   <div id="voucherTab" style="display:none"></div>
-  <footer><b id="footBrand">iORA SG</b> · Every figure loads live from Shopify (Analytics + Orders API) per store — nothing is baked in. Targets are hand-maintained in lib/targets.js. AOV = Revenue ÷ Orders · Conversion = Orders ÷ Sessions.<br>Stores without API credentials in .env stay blank until connected. Ads, voucher, commission and fulfilment panels await a live data source.</footer>
+  <footer><b id="footBrand">iORA SG</b> · Every figure loads live from Shopify (Analytics + Orders API) per store — nothing is baked in. Targets are hand-maintained in lib/targets.js. AOV = Revenue ÷ Orders · Conversion = Orders ÷ Sessions.<br>Stores without API credentials in .env stay blank until connected. Ads and commission panels await a live data source.</footer>
 </div>
 <script>
 const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
@@ -606,7 +603,7 @@ function renderFulfillment(){
   const body=document.getElementById("fcfBody"),foot=document.getElementById("fcfFoot");
   const pd=PICKUP_DELIVERY[state.brand],pdDummy=false;
   if(!pd){document.getElementById("fcfDesc").textContent="";body.innerHTML='<div class="empty">Pick-up vs delivery data isn\u2019t loaded for '+B().name+' yet.</div>';foot.textContent="";return;}
-  document.getElementById("fcfDesc").textContent=B().name+" \u00b7 order fulfilment split \u00b7 2024\u20132026 ("+int(pd.pickup+pd.delivery)+" orders).";
+  document.getElementById("fcfDesc").textContent=B().name+" \u00b7 order fulfilment split \u00b7 live order pull ("+int(pd.pickup+pd.delivery)+" orders in range)"+(extrasOf().fulfillmentTruncated?" \u00b7 partial \u2014 order-page cap reached":"")+".";
   const AC_=AC(),tot=pd.pickup+pd.delivery,dp=tot?pd.delivery/tot*100:0,pp=tot?pd.pickup/tot*100:0,PUC="#8A8172";
   const H=t=>`<div style="font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:0 0 14px">${t}</div>`;
   const fcfCard=(label,val,sub,clr,accent)=>`<div style="flex:1;min-width:160px;background:var(--surface);border:1px solid ${accent?"var(--accent)":"var(--line)"};border-radius:16px;padding:18px 20px;box-shadow:${accent?"0 0 0 1px var(--accent),var(--shadow)":"var(--shadow)"}"><div style="font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);font-weight:600">${label}</div><div style="font-family:'Fraunces',serif;font-weight:600;font-size:28px;margin-top:8px;color:${clr}">${val}</div><div style="font-size:12px;color:var(--muted);margin-top:5px">${sub}</div></div>`;
@@ -614,27 +611,31 @@ function renderFulfillment(){
   html+=H("Delivery vs Self-Pickup");
   html+=`<div style="display:flex;height:44px;border-radius:12px;overflow:hidden;box-shadow:var(--shadow);margin-bottom:16px"><div style="width:${dp}%;background:${AC_};display:flex;align-items:center;justify-content:center;color:#fff;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden">${dp>=12?"Delivery "+dp.toFixed(0)+"%":""}</div><div style="width:${pp}%;background:${PUC};display:flex;align-items:center;justify-content:center;color:#fff;font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden">${pp>=10?"Pick-up "+pp.toFixed(0)+"%":""}</div></div>`;
   html+=`<div style="display:flex;gap:14px;flex-wrap:wrap;margin-bottom:34px">`+fcfCard("Delivery Orders",int(pd.delivery),dp.toFixed(1)+"% of orders",AC_,true)+fcfCard("Self-Pickup Orders",int(pd.pickup),pp.toFixed(1)+"% of orders",PUC,false)+fcfCard("Total Orders",int(tot),"delivery + pickup","var(--ink)",false)+`</div>`;
-  const pts=pd.points,maxP=pts[0]?pts[0][1]:1,sumP=pd.pickup,medals=["\u{1F947}","\u{1F948}","\u{1F949}"];
+  const gcp='grid-template-columns:28px 1fr 74px 56px;gap:12px';
+  const pts=pd.points||[],maxP=pts[0]?pts[0][1]:1,sumP=pd.pickup,medals=["\u{1F947}","\u{1F948}","\u{1F949}"];
+  if(pts.length){
   html+=H("\u{1F3C6} Top 3 Collection Points");
   {const CPPOD={1:{c:"#E7C24B",d:"#B8901E",h:66,lbl:"1st"},2:{c:"#C7C7CF",d:"#8E8E97",h:54,lbl:"2nd"},3:{c:"#CE9A5E",d:"#A56A32",h:46,lbl:"3rd"}};
    const podCP=(p,rank)=>{const P=CPPOD[rank],feat=(rank===1),shP=sumP?p[1]/sumP*100:0,shA=tot?p[1]/tot*100:0;
      return `<div style="flex:1 1 230px;max-width:330px;display:flex;flex-direction:column"><div style="background:var(--surface);border:1.5px solid ${feat?P.c:'var(--line)'};border-bottom:none;border-radius:16px 16px 0 0;padding:20px 18px 16px;box-shadow:var(--shadow)"><div style="display:flex;justify-content:center;margin-top:-4px;margin-bottom:8px"><div style="width:54px;height:54px;border-radius:50%;background:#fff;border:2px solid ${P.c};display:flex;align-items:center;justify-content:center;font-size:29px;box-shadow:0 3px 9px rgba(0,0,0,.14)">${medals[rank-1]}</div></div><div style="text-align:center;font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:${P.d};font-weight:800">${P.lbl} place</div><div style="text-align:center;font-family:'Fraunces',serif;font-weight:600;font-size:16px;margin-top:5px;line-height:1.25">${p[0]}</div><div style="text-align:center;font-family:'Fraunces',serif;font-weight:600;font-size:26px;color:var(--accent);margin-top:12px;letter-spacing:-.01em">${int(p[1])}</div><div style="text-align:center;font-size:11px;color:var(--muted);line-height:1.4">pick-up orders</div><div style="display:flex;justify-content:center;gap:16px;flex-wrap:wrap;margin-top:13px;padding-top:12px;border-top:1px solid var(--line);font-size:12px"><span><b>${shP.toFixed(1)}%</b> <span style="color:var(--muted)">of pick-ups</span></span><span><b>${shA.toFixed(1)}%</b> <span style="color:var(--muted)">of all orders</span></span></div></div><div style="height:${P.h}px;background:linear-gradient(180deg,${P.c},${P.d});border-radius:0 0 12px 12px;display:flex;align-items:center;justify-content:center;box-shadow:var(--shadow)"><span style="font-family:'Fraunces',serif;font-weight:700;font-size:34px;color:#fff;text-shadow:0 2px 4px rgba(0,0,0,.28);line-height:1">${rank}</span></div></div>`;};
    const t3=pts.slice(0,3);
    html+=`<div style="display:flex;gap:16px;align-items:flex-end;justify-content:center;flex-wrap:wrap;margin-bottom:34px">${[[t3[1],2],[t3[0],1],[t3[2],3]].filter(o=>o[0]).map(o=>podCP(o[0],o[1])).join("")}</div>`;}
-  const gcp='grid-template-columns:28px 1fr 74px 56px;gap:12px';
   html+=H("All Collection Points \u00b7 ranked");
   html+=`<div style="display:grid;${gcp};align-items:center;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding-bottom:8px;border-bottom:1px solid var(--line)"><div>#</div><div>Store</div><div style="text-align:right">Orders</div><div style="text-align:right">Share</div></div>`;
   const rowP=(p,i)=>`<div style="display:grid;${gcp};align-items:center;padding:9px 0;border-bottom:1px solid var(--line)"><div style="font-weight:700;color:var(--muted);font-size:12.5px">${i+1}</div><div style="min-width:0"><div style="font-weight:600;font-size:13px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p[0]}</div><div style="height:5px;margin-top:5px;background:var(--paper2);border-radius:99px;overflow:hidden"><div style="height:100%;width:${p[1]/maxP*100}%;background:${AC_}"></div></div></div><div style="text-align:right;font-weight:700;font-size:13px">${int(p[1])}</div><div style="text-align:right;font-size:12.5px;color:var(--muted)">${sumP?(p[1]/sumP*100).toFixed(1):0}%</div></div>`;
   pts.slice(0,3).forEach((p,i)=>html+=rowP(p,i));
   if(pts.length>3){html+=`<details style="margin:2px 0"><summary style="cursor:pointer;padding:11px 0;font-weight:700;font-size:13px;color:var(--accent);list-style:none">Show all ${pts.length} collection points \u25be</summary>`;pts.slice(3).forEach((p,i)=>html+=rowP(p,i+3));html+=`</details>`;}
   html+=`<div style="margin-bottom:34px"></div>`;
-  const rg=pd.regions,maxR=rg[0]?rg[0][1]:1,sumR=rg.reduce((s,x)=>s+x[1],0);
+  }
+  const rg=pd.regions||[],maxR=rg[0]?rg[0][1]:1,sumR=rg.reduce((s,x)=>s+x[1],0);
+  if(rg.length){
   html+=H("\u{1F4CD} Where Our Customers Are \u00b7 delivery orders by area");
   html+=`<div class="desc" style="margin:0 0 14px">Delivery orders grouped by town / area (derived from postal code) \u2014 where ${B().name} ships most.${pdDummy?' <b style="color:var(--accent)">Illustrative</b> \u2014 connect Shopify to populate.':''}</div>`;
   html+=`<div style="display:grid;${gcp};align-items:center;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);padding-bottom:8px;border-bottom:1px solid var(--line)"><div>#</div><div>Area</div><div style="text-align:right">Orders</div><div style="text-align:right">Share</div></div>`;
   const rowR=(x,i)=>`<div style="display:grid;${gcp};align-items:center;padding:9px 0;border-bottom:1px solid var(--line)"><div style="font-weight:700;color:var(--muted);font-size:12.5px">${i+1}</div><div style="min-width:0"><div style="font-weight:600;font-size:13px">${x[0]}</div><div style="height:5px;margin-top:5px;background:var(--paper2);border-radius:99px;overflow:hidden"><div style="height:100%;width:${x[1]/maxR*100}%;background:${AC_}"></div></div></div><div style="text-align:right;font-weight:700;font-size:13px">${int(x[1])}</div><div style="text-align:right;font-size:12.5px;color:var(--muted)">${sumR?(x[1]/sumR*100).toFixed(1):0}%</div></div>`;
   rg.slice(0,3).forEach((x,i)=>html+=rowR(x,i));
   if(rg.length>3){html+=`<details style="margin:2px 0"><summary style="cursor:pointer;padding:11px 0;font-weight:700;font-size:13px;color:var(--accent);list-style:none">Show all ${rg.length} areas \u25be</summary>`;rg.slice(3).forEach((x,i)=>html+=rowR(x,i+3));html+=`</details>`;}
+  }else{html+=H("\u{1F4CD} Where Our Customers Are \u00b7 delivery orders by area")+'<div class="empty">Delivery areas aren\u2019t available for this store\u2019s pull.</div>';}
   body.innerHTML=html;
   {var ih=body.querySelector("#fcfIncHome");if(ih)ih.onchange=function(){geoIncludeHome=ih.checked;renderFulfillment();};}
   foot.textContent=B().name+" \u00b7 "+int(pd.pickup)+" pickup / "+int(pd.delivery)+" delivery orders"+(pdDummy?" \u00b7 illustrative (Shopify not yet connected).":".");
@@ -665,6 +666,9 @@ function commissionOrderPct(){
 function buildKPIs(){
   const host=document.getElementById("kpis");host.innerHTML="";
   const blankKpi=(label,sub)=>{const c=document.createElement("div");c.className="kpi";c.style.opacity=".55";c.style.pointerEvents="none";c.innerHTML='<div class="lbl">'+label+'</div><div class="val" style="color:var(--muted)">\u2014</div><div class="sub">'+(sub||"data pending")+'</div><div class="barline"></div>';host.appendChild(c);};
+  // Loading variant: the source IS live, its fetch just hasn't landed yet \u2014 show a
+  // shimmer instead of the flat "unavailable" gray so it never reads as missing data.
+  const loadingKpi=(label,sub)=>{const c=document.createElement("div");c.className="kpi";c.style.pointerEvents="none";c.innerHTML='<div class="lbl">'+label+'</div><div class="val"><span class="sk-line"></span></div><div class="sub">'+(sub||"loading\u2026")+'</div><div class="barline"></div>';host.appendChild(c);};
   const indivB=(state.brand!=="SGALL"&&state.brand!=="MYALL"&&state.brand!=="GROUP");
   const mono=(state.brand==="MONOSG"||state.brand==="MONOMY"),PY=mono?2026:2025,PRY=PY-1;
   const kpiOrder=B().comm?KPI_ORDER.concat(["commission"]):KPI_ORDER;
@@ -684,7 +688,13 @@ function buildKPIs(){
   if(Object.keys(prodOf()).length){const c=document.createElement("div");c.className="kpi"+(state.metric==="bestsellers"?" active":"");c.dataset.metric="bestsellers";
     c.innerHTML='<div class="lbl">Best Sellers</div><div class="val" style="font-size:19px">Top 10</div><div class="sub">products &amp; category mix</div><div class="chip flat">view ▸</div><div class="barline"></div>';
     c.onclick=()=>selectMetric("bestsellers");host.appendChild(c);}
-  else if(indivB)blankKpi("Best Sellers","products &amp; category mix");
+  else if(indivB){
+    // Products arrive via the deferred /api/insights pull — distinguish "still
+    // loading" (shimmer) from "settled with no data" (gray pending card).
+    var _li=(typeof isLiveBrand==="function"&&isLiveBrand(state.brand))?liveInfo(state.brand):null;
+    if(_li&&!_li.extrasDone&&!(_li.settled&&!_li.ok))loadingKpi("Best Sellers","loading live products…");
+    else blankKpi("Best Sellers","products &amp; category mix");
+  }
   
   {if(state.brand!=="SGALL"&&state.brand!=="MYALL"&&state.brand!=="GROUP"){const c=document.createElement("div");c.className="kpi"+(state.metric==="salemix"?" active":"");c.dataset.metric="salemix";
     c.innerHTML='<div class="lbl">Sale vs Full-Price</div><div class="val" style="font-size:19px">Split</div><div class="sub">SKU · units · revenue</div><div class="chip flat">view ▸</div><div class="barline"></div>';
@@ -693,7 +703,13 @@ function buildKPIs(){
     const c=document.createElement("div");c.className="kpi"+(state.metric==="fulfillment"?" active":"");c.dataset.metric="fulfillment";
     c.innerHTML='<div class="lbl">Pick-up vs Delivery</div><div class="val" style="font-size:21px">'+dp.toFixed(0)+'% <span style="font-size:13px;color:var(--muted)">delivery</span></div><div class="sub">'+(100-dp).toFixed(0)+'% self-pickup</div><div class="chip flat">view \u25b8</div><div class="barline"></div>';
     c.onclick=()=>selectMetric("fulfillment");host.appendChild(c);}
-  else if(indivB)blankKpi("Pick-up vs Delivery","delivery / self-pickup");
+  else if(indivB){
+    // The fulfilment split arrives via the deferred full-orders pull (phase 2) —
+    // same shimmer-vs-pending distinction as Best Sellers, on its own flag.
+    var _lo=(typeof isLiveBrand==="function"&&isLiveBrand(state.brand))?liveInfo(state.brand):null;
+    if(_lo&&!_lo.ordersExtrasDone&&!(_lo.settled&&!_lo.ok))loadingKpi("Pick-up vs Delivery","loading live orders…");
+    else blankKpi("Pick-up vs Delivery","delivery / self-pickup");
+  }
 }
 function renderLive(){
   const yr=liveState.year, prev=yr-1;
@@ -1149,6 +1165,23 @@ function voucherTheme(k){
 function getVoucherUnit(){
   const k=state.brand;
   if(VOUCH_STORE[k])return {key:k,store:VOUCH_STORE[k],rows:VOUCH_ROWS[k],cur:VOUCH_STORE[k].cur,brand:VOUCH_STORE[k].brand,dummy:false};
+  // Live voucher report from /api/insights (sections.voucherReport). Every figure is
+  // the API's own — anything it couldn't supply stays null and renders as "—".
+  const vr=extrasOf().voucherReport;
+  if(vr&&vr.rows&&vr.rows.length){
+    const rng=extrasOf()._range||null;
+    const yr=(rng&&rng.end)?+rng.end.slice(0,4):(new Date()).getFullYear();
+    const region=/MY$/.test(k)?"MY":"SG";
+    const cur=((CUR&&CUR.sym)||"$").trim();
+    let target=null; // only a real configured target for the range year — never invented
+    const tg=B().targets&&B().targets[yr];
+    if(tg){const tv=tg.filter(v=>v!=null);if(tv.length)target=tv.reduce((a,b)=>a+b,0);}
+    return {key:k,
+      store:{brand:B().name.replace(/\s+(SG|MY)$/,""),region:region,cur:cur,target:target,
+             actual:(vr.store&&vr.store.actual!=null)?vr.store.actual:null,
+             aov:(vr.store&&vr.store.aov!=null)?vr.store.aov:null},
+      rows:vr.rows,cur:cur,brand:B().name,range:rng,live:true,dummy:false};
+  }
   return null; // no shipped voucher report for this store — the tab shows an honest empty state
 }
 var CHCOLOR={Website:'#2f8f5b',Shopee:'#ee4d2d',Lazada:'#1a5cb0'};
@@ -1190,12 +1223,17 @@ function renderVoucherDeck(mode){
   window.voucherState=window.voucherState||{ch:"all"};
   if(!getVoucherUnit())return "";
   const U=getVoucherUnit(),cur=U.cur,T=voucherTheme(U.key),s=U.store;
-  const vm0=v=>cur+Math.round(v).toLocaleString("en-US");
-  const vm2=v=>cur+(+v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
+  const vm0=v=>v==null?"—":cur+Math.round(v).toLocaleString("en-US");
+  const vm2=v=>v==null?"—":cur+(+v).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2});
   const hasMkt=U.rows.some(r=>r.ch==="Shopee"||r.ch==="Lazada");
   const chOf=r=>(r.ch==="Shopee"||r.ch==="Lazada")?"Marketplace":"Website";
   const sec=t=>`<div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:26px 2px 12px">${t} <span style="color:${T.a}">\u2014 ${s.brand} ${s.region}</span></div>`;
   let h="";
+  // Live report: rows come from /api/insights for the pulled range and are shown
+  // verbatim — never rescaled to another period — so the year/month rescaling
+  // filter below only ever applies to a seeded (dummy) deck.
+  var LIVEU=!!U.live;
+  var _fmtRD=function(s){return s?(+s.slice(8,10))+" "+MONTHS[+s.slice(5,7)-1]:"";};
   // ===== period filter — drives every figure below =====
   var vY=discState.year||2026, vAll=(discState.mode!=="month"), vM=vAll?null:(discState.month==null?5:discState.month);
   var vYears=[2024,2025,2026].filter(function(y){return B().rev&&B().rev[y]&&B().rev[y].some(function(v){return v!=null;});});
@@ -1205,17 +1243,23 @@ function renderVoucherDeck(mode){
   if(!vAll&&vMonths.indexOf(vM)<0){vM=(vMonths.length?vMonths[vMonths.length-1]:5);discState.month=vM;}
   var vScope=vAll?("Full year "+vY):(MONTHS[vM]+" "+vY);
   var vIsReal=(vY===2026&&vM===5);
+  if(LIVEU){
+    vAll=true;vM=null;vIsReal=false;
+    if(U.range&&U.range.end)vY=+U.range.end.slice(0,4);
+    vScope=(U.range&&U.range.start&&U.range.end)?(_fmtRD(U.range.start)+" – "+_fmtRD(U.range.end)+" "+U.range.end.slice(0,4)):"pulled range";
+  }
   var _vsum=function(a){return (a||[]).filter(function(v){return v!=null;}).reduce(function(x,y){return x+y;},0);};
   var jDisc=(B().dis&&B().dis[2026]&&B().dis[2026][5]!=null)?B().dis[2026][5]:null;
   var pDisc=vAll?((B().dis&&B().dis[vY])?_vsum(B().dis[vY]):null):((B().dis&&B().dis[vY])?B().dis[vY][vM]:null);
   var vf;
   if(jDisc&&pDisc)vf=pDisc/jDisc;
   else{var jRev=(B().rev&&B().rev[2026])?B().rev[2026][5]:null,pRev=vAll?((B().rev&&B().rev[vY])?_vsum(B().rev[vY]):null):((B().rev&&B().rev[vY])?B().rev[vY][vM]:null);vf=(jRev&&pRev)?pRev/jRev:1;}
-  var scopedRows=vIsReal?U.rows.map(function(r){var nr={};for(var kk in r)nr[kk]=r[kk];nr.date=String(r.date).replace(/June/g,"Jun")+" \u00b7 2026";return nr;}):U.rows.map(function(r){var nr={};for(var kk in r)nr[kk]=r[kk];if(!r.pending){nr.sales=r.sales*vf;nr.disc=r.disc*vf;nr.redeemed=Math.max(1,Math.round(r.redeemed*vf));nr.sent=Math.round(r.sent*vf);}nr.date=vAll?(String(r.date).replace(/June/g,"Jun")+" \u00b7 "+vY):(String(r.date).replace(/June/g,MONTHS[vM])+" \u00b7 "+vY);return nr;});
+  var scopedRows=LIVEU?U.rows.map(function(r){var nr={};for(var kk in r)nr[kk]=r[kk];nr.date=(r.date!=null?String(r.date)+" \u00b7 "+vY:"\u2014");return nr;}):(vIsReal?U.rows.map(function(r){var nr={};for(var kk in r)nr[kk]=r[kk];nr.date=String(r.date).replace(/June/g,"Jun")+" \u00b7 2026";return nr;}):U.rows.map(function(r){var nr={};for(var kk in r)nr[kk]=r[kk];if(!r.pending){nr.sales=r.sales*vf;nr.disc=r.disc*vf;nr.redeemed=Math.max(1,Math.round(r.redeemed*vf));nr.sent=Math.round(r.sent*vf);}nr.date=vAll?(String(r.date).replace(/June/g,"Jun")+" \u00b7 "+vY):(String(r.date).replace(/June/g,MONTHS[vM])+" \u00b7 "+vY);return nr;}));
   var _vselSty='font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:7px 11px;cursor:pointer';
   var vFilter='<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><div class="seg" id="discYear">'+vYears.map(function(y){return '<button data-y="'+y+'" class="'+(y===vY?'on':'')+'">'+y+'</button>';}).join("")+'</div><select id="discMonthSel" style="'+_vselSty+'"><option value="all"'+(vAll?" selected":"")+'>All months</option>'+vMonths.map(function(i){return '<option value="'+i+'"'+((!vAll&&vM===i)?" selected":"")+'>'+MONTHS[i]+' '+vY+'</option>';}).join("")+'</select></div>';
-  h+='<div style="display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:12px;margin:0 2px 4px">'+vFilter+'</div>';
+  if(!LIVEU)h+='<div style="display:flex;justify-content:flex-end;align-items:center;flex-wrap:wrap;gap:12px;margin:0 2px 4px">'+vFilter+'</div>';
   var _RP=(function(){
+    if(LIVEU)return {label:vScope,range:vScope}; // live rows cover exactly the pulled range
     var mn=["January","February","March","April","May","June","July","August","September","October","November","December"];
     if(vAll){
       var live=(B().rev&&B().rev[vY])?B().rev[vY].map(function(v,i){return v!=null?i:null;}).filter(function(i){return i!=null;}):[];
@@ -1232,7 +1276,18 @@ function renderVoucherDeck(mode){
   var _totSales=_live.reduce(function(a,r){return a+(r.sales||0);},0);
   var _totDisc=_live.reduce(function(a,r){return a+(r.disc||0);},0);
   var _discOrders=_live.reduce(function(a,r){return a+(r.redeemed||0);},0);
-  var _scopeOrders=vAll?((B().ord&&B().ord[vY])?(B().ord[vY]||[]).filter(function(v){return v!=null;}).reduce(function(a,b){return a+b;},0):null):((B().ord&&B().ord[vY])?B().ord[vY][vM]:null);
+  var _scopeOrders;
+  if(LIVEU){
+    // Real orders total for the pulled range only — sum the range's months from the
+    // live history; anything else would misstate the "% of orders" denominator.
+    _scopeOrders=null;
+    if(U.range&&U.range.start&&U.range.end&&U.range.start.slice(0,4)===U.range.end.slice(0,4)){
+      var _oy=B().ord&&B().ord[vY];
+      if(_oy){var _m0=+U.range.start.slice(5,7)-1,_m1=+U.range.end.slice(5,7)-1,_anyO=false,_so=0;
+        for(var _mi=_m0;_mi<=_m1;_mi++){if(_oy[_mi]!=null){_so+=_oy[_mi];_anyO=true;}}
+        if(_anyO)_scopeOrders=_so;}
+    }
+  }else _scopeOrders=vAll?((B().ord&&B().ord[vY])?(B().ord[vY]||[]).filter(function(v){return v!=null;}).reduce(function(a,b){return a+b;},0):null):((B().ord&&B().ord[vY])?B().ord[vY][vM]:null);
   var _juneOrders=_scopeOrders;
   var _pctDisc=(_juneOrders&&_discOrders)?_discOrders/_juneOrders*100:null;
   const stat=(k,v,extra)=>`<div style="flex:1;min-width:150px;background:var(--surface);border:1px solid var(--line);border-left:4px solid ${T.a};border-radius:14px;padding:14px 16px;box-shadow:var(--shadow)"><div style="font-size:10px;font-weight:800;letter-spacing:.5px;text-transform:uppercase;color:var(--muted)">${k}</div><div style="font-family:'Fraunces',serif;font-size:22px;font-weight:600;margin-top:5px">${v}</div>${extra||""}</div>`;
@@ -1244,21 +1299,21 @@ function renderVoucherDeck(mode){
     h+=sec("Discount &amp; voucher impact");
   }
   h+=`<div style="display:flex;gap:12px;flex-wrap:wrap;margin:14px 0 2px">`
-    +stat("Sales Attributed to Discount",vm0(_totSales),`<div style="font-size:10.5px;color:var(--muted);margin-top:4px">revenue from orders that used a discount</div>`)
+    +stat("Sales Attributed to Discount",vm0(_totSales),`<div style="font-size:10.5px;color:var(--muted);margin-top:4px">revenue from orders that used a discount code</div>`)
     +stat("Orders With a Discount",_discOrders.toLocaleString(),`<div style="font-size:10.5px;color:var(--muted);margin-top:4px">discount / voucher redemptions</div>`)
-    +stat("% of Orders With a Discount",`<span style="color:${T.d}">${_pctDisc!=null?_pctDisc.toFixed(1)+"%":"\u2014"}</span>`,`<div style="font-size:10.5px;color:var(--muted);margin-top:4px">${_juneOrders?"of "+_juneOrders.toLocaleString()+" orders in "+vScope:"vs total June orders"}</div>`)
+    +stat("% of Orders With a Discount",`<span style="color:${T.d}">${_pctDisc!=null?_pctDisc.toFixed(1)+"%":"\u2014"}</span>`,`<div style="font-size:10.5px;color:var(--muted);margin-top:4px">${_juneOrders?"of "+_juneOrders.toLocaleString()+" orders in "+vScope:"total orders for this period unavailable"}</div>`)
     +stat("Total Discount Given",vm0(_totDisc),`<div style="font-size:10.5px;color:var(--muted);margin-top:4px">markdown + code value</div>`)
     +stat("Average Discount %",`<span style="color:${T.d}">${(_totSales>0?(_totDisc/_totSales*100).toFixed(1)+"%":"\u2014")}</span>`,`<div style="font-size:10.5px;color:var(--muted);margin-top:4px">total discount given \u00f7 sales attributed to discount</div>`)
     +`</div>`;
   // top & worst (website only) — scoped to filter
   const web=scopedRows.filter(r=>r.ch==="Website"&&!r.pending).slice().sort((a,b)=>b.sales-a.sales);
   h+=`<div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin:26px 2px 12px"><div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted)">Top &amp; Worst Performing Voucher <span style="color:var(--muted);font-weight:600;text-transform:none;letter-spacing:0">(website vouchers)</span> <span style="color:${T.a}">\u2014 ${vScope}</span></div></div>`;
-  const perf=(d,worst)=>`<div style="flex:1;min-width:260px;background:${worst?"#f6f4f4":T.soft};border:1px solid ${worst?"#efe3e2":T.a+"33"};border-radius:14px;padding:18px 20px"><div style="font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${worst?"#b23b2e":T.d};margin-bottom:10px">${worst?"\u25BC Worst Performing Voucher":"\u2605 Top Performing Voucher"}</div><div style="font-family:'Fraunces',serif;font-size:18px;font-weight:600;line-height:1.25">${d.title}</div><div style="font-size:12px;color:var(--muted);margin-top:4px">${d.mech}</div><div style="font-family:'Fraunces',serif;font-size:28px;font-weight:700;margin:12px 0 2px;color:${worst?"#b23b2e":T.d}">${vm0(d.sales)}</div><div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Promotion period \u00b7 ${d.date}</div><div style="display:flex;gap:20px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,0,0,.08)"><div><div style="font-weight:800">${vm2(d.aov)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Avg order value</div></div><div><div style="font-weight:800">${vm0(d.disc)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Total discount</div></div><div><div style="font-weight:800">${d.redeemed.toLocaleString()}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Redemptions</div></div></div></div>`;
+  const perf=(d,worst)=>`<div style="flex:1;min-width:260px;background:${worst?"#f6f4f4":T.soft};border:1px solid ${worst?"#efe3e2":T.a+"33"};border-radius:14px;padding:18px 20px"><div style="font-size:11px;font-weight:800;letter-spacing:.8px;text-transform:uppercase;color:${worst?"#b23b2e":T.d};margin-bottom:10px">${worst?"\u25BC Worst Performing Voucher":"\u2605 Top Performing Voucher"}</div><div style="font-family:'Fraunces',serif;font-size:18px;font-weight:600;line-height:1.25">${d.title}</div>${d.mech?`<div style="font-size:12px;color:var(--muted);margin-top:4px">${d.mech}</div>`:""}<div style="font-family:'Fraunces',serif;font-size:28px;font-weight:700;margin:12px 0 2px;color:${worst?"#b23b2e":T.d}">${vm0(d.sales)}</div><div style="font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px">Promotion period \u00b7 ${d.date}</div><div style="display:flex;gap:20px;margin-top:14px;padding-top:12px;border-top:1px solid rgba(0,0,0,.08)"><div><div style="font-weight:800">${vm2(d.aov)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Avg order value</div></div><div><div style="font-weight:800">${vm0(d.disc)}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Total discount</div></div><div><div style="font-weight:800">${d.redeemed!=null?d.redeemed.toLocaleString():"\u2014"}</div><div style="font-size:10px;color:var(--muted);text-transform:uppercase">Redemptions</div></div></div></div>`;
   if(web.length){h+=`<div style="display:flex;gap:14px;flex-wrap:wrap">`+perf(web[0],false)+(web.length>1?perf(web[web.length-1],true):"")+`</div>`;
     // ranking bars
     const mx=web[0].sales;
     h+=`<div style="font-size:10px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted);margin:24px 2px 12px">Website voucher sales ranking (${cur})</div>`;
-    h+=web.map(function(d,i){var pl=d.sales/mx*100,medal=i===0?"\u{1F947}":i===1?"\u{1F948}":i===2?"\u{1F949}":"\u{1F3C5}";return '<div style="display:flex;align-items:center;gap:14px;margin-bottom:14px"><div style="flex:0 0 28px;text-align:center;font-family:\'Fraunces\',serif;font-weight:700;font-size:'+(i<3?"19px":"14px")+';color:'+(i===0?T.d:"var(--muted)")+'">'+medal+'</div><div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:5px"><span style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+d.title+'</span><span style="font-family:\'Fraunces\',serif;font-size:15px;font-weight:800;flex:0 0 auto">'+vm0(d.sales)+'</span></div><div style="height:11px;background:var(--paper2);border-radius:7px;overflow:hidden"><div style="height:100%;width:'+pl.toFixed(1)+'%;background:linear-gradient(90deg,'+T.a+','+T.d+');border-radius:7px"></div></div><div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10.5px;color:var(--muted)"><span>'+d.redeemed.toLocaleString()+' redemptions \u00b7 '+vm2(d.aov)+' AOV</span><span>'+pl.toFixed(0)+'% of top</span></div></div></div>';}).join("");
+    h+=web.map(function(d,i){var pl=d.sales/mx*100,medal=i===0?"\u{1F947}":i===1?"\u{1F948}":i===2?"\u{1F949}":"\u{1F3C5}";return '<div style="display:flex;align-items:center;gap:14px;margin-bottom:14px"><div style="flex:0 0 28px;text-align:center;font-family:\'Fraunces\',serif;font-weight:700;font-size:'+(i<3?"19px":"14px")+';color:'+(i===0?T.d:"var(--muted)")+'">'+medal+'</div><div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:5px"><span style="font-size:13px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">'+d.title+'</span><span style="font-family:\'Fraunces\',serif;font-size:15px;font-weight:800;flex:0 0 auto">'+vm0(d.sales)+'</span></div><div style="height:11px;background:var(--paper2);border-radius:7px;overflow:hidden"><div style="height:100%;width:'+pl.toFixed(1)+'%;background:linear-gradient(90deg,'+T.a+','+T.d+');border-radius:7px"></div></div><div style="display:flex;justify-content:space-between;margin-top:4px;font-size:10.5px;color:var(--muted)"><span>'+(d.redeemed!=null?d.redeemed.toLocaleString()+' redemptions \u00b7 ':'')+vm2(d.aov)+' AOV</span><span>'+pl.toFixed(0)+'% of top</span></div></div></div>';}).join("");
   } else {h+=`<div class="desc">No website vouchers in this view.</div>`;}
   // full table
   const chSel=window.voucherState.ch;
@@ -1272,11 +1327,11 @@ function renderVoucherDeck(mode){
   h+=tRows.map(d=>{
     const badge=d.target?`<span style="display:inline-block;font-size:9.5px;font-weight:800;letter-spacing:.4px;text-transform:uppercase;color:${T.d};background:${T.soft};border:1px solid ${T.a};padding:3px 8px;border-radius:20px;margin-right:6px">\u{1F3AF} Target Voucher</span>`:"";
     const chip=`<span style="font-size:9.5px;font-weight:700;padding:2px 9px;border-radius:20px;border:1px solid var(--line);color:var(--muted)">${d.ch}</span>`;
-    const promo=`<div style="font-weight:800;font-size:13px;color:${VCHCOLOR[d.ch]||T.d}"><a href="${voucherAdminURL(d.title,d.ch)}" target="_blank" rel="noopener" title="Open in ${d.ch==="Shopee"?"Shopee Seller Centre":d.ch==="Lazada"?"Lazada Seller Center":"Shopify discounts"}" style="color:inherit;text-decoration:none;border-bottom:1px dashed ${(VCHCOLOR[d.ch]||T.d)}66">${d.title} <span style="font-size:10px;opacity:.55">\u2197</span></a></div><div style="font-size:11.5px;color:var(--muted);margin-top:3px">${d.mech}</div><div style="margin-top:7px">${badge}${chip}</div>`;
+    const promo=`<div style="font-weight:800;font-size:13px;color:${VCHCOLOR[d.ch]||T.d}"><a href="${voucherAdminURL(d.title,d.ch)}" target="_blank" rel="noopener" title="Open in ${d.ch==="Shopee"?"Shopee Seller Centre":d.ch==="Lazada"?"Lazada Seller Center":"Shopify discounts"}" style="color:inherit;text-decoration:none;border-bottom:1px dashed ${(VCHCOLOR[d.ch]||T.d)}66">${d.title} <span style="font-size:10px;opacity:.55">\u2197</span></a></div>${d.mech?`<div style="font-size:11.5px;color:var(--muted);margin-top:3px">${d.mech}</div>`:""}<div style="margin-top:7px">${badge}${chip}</div>`;
     const td=`<td style="text-align:right;padding:13px 9px;border-top:1px solid var(--line);font-variant-numeric:tabular-nums">`,tdl=td.replace("text-align:right","text-align:left");
     if(d.pending)return `<tr>${tdl}${promo}</td>${tdl}${d.date}</td><td colspan="${FULL?7:3}" style="padding:13px 9px;border-top:1px solid var(--line);color:var(--muted);font-style:italic">Mystery cashback issued 6 July 2026 \u2014 results pending${d.note?" \u00b7 "+d.note:""}</td></tr>`;
     const rest=FULL
-      ? `${td}${vm2(d.aov)}</td>${td}${vm2(d.disc)}</td>${td}${d.discPct.toFixed(2)}%</td>${td}${d.sent.toLocaleString()}</td>${td}${d.redeemed.toLocaleString()}</td>${td}${d.rate==null?"\u2014":d.rate.toFixed(2)+"%"}</td>`
+      ? `${td}${vm2(d.aov)}</td>${td}${vm2(d.disc)}</td>${td}${d.discPct==null?"\u2014":d.discPct.toFixed(2)+"%"}</td>${td}${d.sent==null?"\u2014":d.sent.toLocaleString()}</td>${td}${d.redeemed==null?"\u2014":d.redeemed.toLocaleString()}</td>${td}${d.rate==null?"\u2014":d.rate.toFixed(2)+"%"}</td>`
       : `${td}${vm2(d.disc)}</td>${td}${vm2(d.aov)}</td>`;
     return `<tr>${tdl}${promo}</td>${tdl}<span style="white-space:nowrap">${d.date}</span></td>${td}${vm2(d.sales)}</td>${rest}</tr>`;
   }).join("");
@@ -1312,7 +1367,7 @@ function renderVoucherDeck(mode){
   if(FULL){
     h+=`<div style="margin-top:26px;padding:16px 18px;border:1px solid var(--line);border-left:4px solid ${T.a};border-radius:14px;background:${T.soft};font-size:11.5px;line-height:1.65;color:var(--muted)">`
       +`<b style="color:var(--ink);display:block;margin-bottom:6px;font-size:11px;letter-spacing:.8px;text-transform:uppercase">Notes</b>`
-      +`Vouchers are listed most-recent first. Total Sales reflects total promotion sales. `
+      +`Vouchers are ranked by sales. Total Sales reflects total promotion sales. Send counts and redemption rates need the email platform (not yet connected) and show \u2014. `
       +`Top &amp; worst performers and the sales ranking cover website vouchers only \u2014 marketplace campaigns are co-funded and excluded. `
       +`The promotion calendar plots the days each promotion runs, colour-coded by channel.`
       +(U.rows.some(function(r){return r.pending;})?` The Lucky Cart is a tiered mystery-cashback promo issued 6 July 2026 \u2014 results pending the next report.`:``)
@@ -1341,7 +1396,7 @@ function renderVoucherTab(){
   if(sub==="calendar"){
     var R=promoCalHTML(promoCalState.year);
     promoCalState.year=R.year;
-    h+='<section class="panel"><div class="panel-head"><div><h2>Monthly Promotion Calendar</h2><div class="desc">'+B().name+' \u2014 '+R.year+(R.year===2026?" (Jan\u2013Jun actual-to-date, later months planned)":"")+'</div></div>'
+    h+='<section class="panel"><div class="panel-head"><div><h2>Monthly Promotion Calendar</h2><div class="desc">'+B().name+' \u2014 '+R.year+(R.year===2026?" (actual-to-date, later months planned)":"")+'</div></div>'
       +'<div class="controls"><div class="seg" id="promoTabYear">'+R.years.map(function(y){return '<button data-y="'+y+'" class="'+(y===R.year?"on":"")+'">'+y+'</button>';}).join("")+'</div></div></div>'
       +R.html+'<div class="legend-note">'+R.foot+'</div></section>';
   }else{
@@ -1455,11 +1510,12 @@ function renderDiscountMonthly(){
     addTile(tl,"Avg / Month",money(idx.length?totGiven/idx.length:0),"discount value");
     addTile(tl,"% of Revenue",totRev?(totGiven/totRev*100).toFixed(1)+"%":"–","discount ÷ revenue");
   }else if(dm){
-    const drows=dm.slice().sort((a,b)=>b[1]-a[1]),top=drows[0];
-    const aRev=drows.filter(r=>r[4]==="auto").reduce((s,r)=>s+r[1],0),dRev=drows.reduce((s,r)=>s+r[1],0);
-    addTile(tl,"Top Discount ("+MONTHS[fm]+")",'<span style="font-size:'+(top[0].length>12?"14px":"17px")+'">'+top[0]+'</span> '+TYPE_BADGE(top[4]),moneyP(top[1])+" · "+int(top[2])+" orders");
+    const drows=dm.slice().sort((a,b)=>(b[1]||0)-(a[1]||0));
+    const top=drows.find(r=>r[1]!=null)||drows[0];   // automatic offers carry null revenue (not attributable)
+    const aG=drows.filter(r=>r[4]==="auto").reduce((s,r)=>s+(r[3]||0),0),dG=drows.reduce((s,r)=>s+(r[3]||0),0);
+    addTile(tl,"Top Discount ("+MONTHS[fm]+")",'<span style="font-size:'+(top[0].length>12?"14px":"17px")+'">'+top[0]+'</span> '+TYPE_BADGE(top[4]),(top[1]!=null?moneyP(top[1]):"\u2014")+" · "+(top[2]!=null?int(top[2])+" orders":"orders n/a"));
     addTile(tl,"Discounts Used",drows.length,"distinct offers + codes");
-    addTile(tl,"Auto vs Code",dRev?Math.round(aRev/dRev*100)+"% / "+Math.round((dRev-aRev)/dRev*100)+"%":"–","share of discounted revenue");
+    addTile(tl,"Auto vs Code",dG?Math.round(aG/dG*100)+"% / "+Math.round((dG-aG)/dG*100)+"%":"–","share of discount value given");
     addTile(tl,"Discount Given",moneyP(disA[fm]),(revA[fm]?(disA[fm]/revA[fm]*100).toFixed(1)+"% of revenue":"value redeemed"));
   }else{
     const rank=idx.slice().sort((a,b)=>disA[b]-disA[a]).indexOf(fm)+1;
@@ -1470,12 +1526,12 @@ function renderDiscountMonthly(){
   }
   const sel=document.getElementById("discMonth");if(sel)sel.onchange=()=>{discState.month=sel.value===""?null:+sel.value;renderDiscount();};
   if(fm!=null&&dm){   // ---- TOP DISCOUNTS for the selected month (automatic + code) ----
-    const drows=dm.slice().sort((a,b)=>b[1]-a[1]);
+    const drows=dm.slice().sort((a,b)=>(b[1]||0)-(a[1]||0));
     const names=drows.map(r=>r[0]),vals=drows.map(r=>r[1]),cols=drows.map(r=>r[4]==="auto"?AC():"#16130E");
     discChart=new Chart(document.getElementById("discChart"),{type:"bar",data:{labels:names,datasets:[{data:vals,backgroundColor:cols,borderRadius:6,maxBarThickness:30}]},options:{indexAxis:"y",responsive:true,maintainAspectRatio:false,animation:{duration:500},plugins:{legend:{display:false},tooltip:{backgroundColor:"#16130E",padding:12,cornerRadius:8,callbacks:{label:c=>"  Revenue:  "+moneyP(c.parsed.x),afterLabel:c=>"  Type:  "+(drows[c.dataIndex][4]==="auto"?"Automatic":"Code")+"\n  Orders:  "+int(drows[c.dataIndex][2])+"\n  Given:  "+moneyP(drows[c.dataIndex][3])}}},scales:{x:{grid:{color:"#E7E1D3"},border:{display:false},ticks:{font:{family:"Archivo",size:11},color:"#7A7466",callback:v=>CUR.sym+(v>=1000?(v/1000)+"k":v)}},y:{grid:{display:false},ticks:{font:{family:"Archivo",size:12,weight:"600"},color:"#16130E"}}}}});
     const tR=drows.reduce((s,r)=>s+r[1],0),tO=drows.reduce((s,r)=>s+r[2],0),tG=drows.reduce((s,r)=>s+r[3],0);
     let head='<thead><tr><th>Discount</th><th>Type</th><th>Revenue</th><th>Orders</th><th>Discount Given</th><th>Avg / Order</th></tr></thead><tbody>';
-    let bd=drows.map(r=>'<tr><td class="codecell">'+r[0]+'</td><td>'+TYPE_BADGE(r[4])+'</td><td>'+moneyP(r[1])+'</td><td>'+int(r[2])+'</td><td>'+moneyP(r[3])+'</td><td>'+(r[2]?moneyP(r[3]/r[2]):"–")+'</td></tr>').join("");
+    let bd=drows.map(r=>'<tr><td class="codecell">'+r[0]+'</td><td>'+TYPE_BADGE(r[4])+'</td><td>'+(r[1]!=null?moneyP(r[1]):"\u2014")+'</td><td>'+(r[2]!=null?int(r[2]):"\u2014")+'</td><td>'+moneyP(r[3])+'</td><td>'+(r[2]?moneyP(r[3]/r[2]):"–")+'</td></tr>').join("");
     bd+='<tr class="total"><td>TOP '+drows.length+' ('+MONTHS[fm]+' '+y+')</td><td></td><td>'+moneyP(tR)+'</td><td>'+int(tO)+'</td><td>'+moneyP(tG)+'</td><td>'+(tO?moneyP(tG/tO):"–")+'</td></tr>';
     document.getElementById("discTable").innerHTML=head+bd+'</tbody>';
     foot.textContent="Top performing discounts in "+MONTHS[fm]+" "+y+", ranked by revenue — automatic offers and codes combined. Free-shipping offers and single-use gift codes (1 order each) are excluded from the ranking. Discount given = total value redeemed. Currency "+CUR.code+".";
@@ -1489,7 +1545,7 @@ function renderDiscountMonthly(){
   ]},options:{responsive:true,maintainAspectRatio:false,animation:{duration:500},interaction:{intersect:false,mode:"index"},plugins:{legend:{display:true,labels:{font:{family:"Archivo"},color:"#16130E",usePointStyle:true,boxWidth:8}},tooltip:{backgroundColor:"#16130E",padding:12,cornerRadius:8,callbacks:{label:c=>c.dataset.yAxisID==="y1"?"  % of revenue:  "+(c.parsed.y==null?"–":c.parsed.y.toFixed(1)+"%"):"  Discount given:  "+moneyP(c.parsed.y)}}},scales:{x:{grid:{display:false},ticks:{font:{family:"Archivo",size:11},color:"#7A7466"}},y:{position:"left",grid:{color:"#E7E1D3"},border:{display:false},ticks:{font:{family:"Archivo",size:11},color:"#7A7466",callback:v=>CUR.sym+(v>=1000?(v/1000).toFixed(0)+"k":v)}},y1:{position:"right",grid:{display:false},border:{display:false},ticks:{font:{family:"Archivo",size:11},color:"#7A7466",callback:v=>v+"%"}}}}});
   const showIdx=(fm==null)?idx:[fm];
   const dmY=(DISC_MONTHLY[state.brand]&&DISC_MONTHLY[state.brand][y])||null;   // per-discount data for this brand+year
-  const topOf=i=>{const md=dmY&&dmY[i];return (md&&md.length)?md.slice().sort((a,b)=>b[1]-a[1])[0]:null;};
+  const topOf=i=>{const md=dmY&&dmY[i];if(!md||!md.length)return null;const withRev=md.filter(r=>r[1]!=null);return withRev.length?withRev.slice().sort((a,b)=>b[1]-a[1])[0]:null;};
   const hasDM=!!dmY&&showIdx.some(i=>topOf(i));
   const topCell=i=>{const t=topOf(i);return t?'<td><span style="font-weight:600">'+t[0]+'</span> '+TYPE_BADGE(t[4])+' <span style="color:var(--muted);font-size:11.5px">'+moneyP(t[1])+' · '+int(t[2])+' ord</span></td>':'<td style="color:var(--muted)">–</td>';};
   let head='<thead><tr><th>Month</th><th>Discount Given</th><th>% of Revenue</th>'+(hasV?'<th>Code Orders</th><th>Code-order %</th>':'<th>Orders</th>')+(hasDM?'<th>Best Performing Discount</th>':'')+'</tr></thead><tbody>';
@@ -1497,7 +1553,7 @@ function renderDiscountMonthly(){
   if(fm==null){const aTop=(DISCOUNTS[state.brand]&&DISCOUNTS[state.brand][y])?DISCOUNTS[state.brand][y].slice().sort((a,b)=>b[1]-a[1])[0]:null;
     bd+='<tr class="total"><td>TOTAL ('+y+')</td><td>'+moneyP(totGiven)+'</td><td>'+(totRev?(totGiven/totRev*100).toFixed(1)+'%':'–')+'</td>'+(hasV?'<td>'+int(totVou)+'</td><td>'+(totOrd?(totVou/totOrd*100).toFixed(1)+'%':'–')+'</td>':'<td>'+int(totOrd)+'</td>')+(hasDM?(aTop?'<td><span style="font-weight:600">'+aTop[0]+'</span> '+TYPE_BADGE(aTop.length>=5?aTop[4]:discType(aTop[0]))+' <span style="color:var(--muted);font-size:11.5px">top for year</span></td>':'<td></td>'):'')+'</tr>';}
   document.getElementById("discTable").innerHTML=head+bd+'</tbody>';
-  foot.textContent=(fm==null?"Monthly discount value given (automatic + code), "+y+(hasDM?" — the Best Performing Discount column shows each month’s #1 by revenue":"")+". ":MONTHS[fm]+" "+y+" in focus — pick “All months” to compare the full year. ")+"% of revenue = discount ÷ sales revenue. "+(hasV?"Code orders = orders that redeemed a discount code. ":"")+((fm!=null&&!dm)?"A per-discount ranking for "+MONTHS[fm]+" "+y+" isn’t pulled yet (iORA SG 2026 is loaded) — showing the month total. ":"")+(!dmY&&fm==null?(DISC_MONTHLY[state.brand]?"The Best Performing Discount column is loaded for 2026 — switch the year to 2026 to see it. ":"Per-month best-discount data is pending a Shopify pull for "+B().name+". "):"")+"Currency "+CUR.code+".";
+  foot.textContent=(fm==null?"Monthly discount value given (automatic + code), "+y+(hasDM?" — the Best Performing Discount column shows each month’s #1 by revenue":"")+". ":MONTHS[fm]+" "+y+" in focus — pick “All months” to compare the full year. ")+"% of revenue = discount ÷ sales revenue. "+(hasV?"Code orders = orders that redeemed a discount code. ":"")+((fm!=null&&!dm)?"A per-discount ranking for "+MONTHS[fm]+" "+y+" isn’t available in the pulled range — showing the month total. ":"")+(!dmY&&fm==null?(DISC_MONTHLY[state.brand]?"The Best Performing Discount column is loaded for 2026 — switch the year to 2026 to see it. ":"Per-month best-discount data is pending a Shopify pull for "+B().name+". "):"")+"Currency "+CUR.code+".";
 }
 function fcBrandCalc(k){
   const r25=(BRANDS[k].rev||{})[2025],r26=(BRANDS[k].rev||{})[2026];
@@ -1776,20 +1832,13 @@ function renderRevDetail(){
 let simpleView="month", simpleCmp="2026-2025";
 let trafYear=2026, trafMonth="all";
 function trafficSources(brand,year,month){
-  var srcRoot=(SESSIONSRC[brand]&&SESSIONSRC[brand]["2026"])?SESSIONSRC[brand]["2026"].sources:null;
-  if(!srcRoot)return null;
-  if(+year===2026&&month==="all")return srcRoot.map(function(r){return [r[0],r[1]];}); // real aggregate
-  var baseTot=srcRoot.reduce(function(s,r){return s+r[1];},0)||1;
-  var props=srcRoot.map(function(r){return [r[0],r[1]/baseTot];});
-  var ses=(BRANDS[brand]&&BRANDS[brand].ses&&BRANDS[brand].ses[year])?BRANDS[brand].ses[year]:null;
-  var scopeTot;
-  if(month==="all")scopeTot=ses?ses.filter(function(v){return v!=null;}).reduce(function(a,b){return a+b;},0):Math.round(baseTot);
-  else scopeTot=(ses&&ses[+month]!=null)?ses[+month]:0;
-  if(!scopeTot)return [];
-  var mm=(month==="all")?7:+month;
-  var vals=props.map(function(p,i){var hsh=Math.abs(Math.sin((i+1)*99.7+(mm+3)*13.1)),jf=0.9+hsh*0.2;return [p[0],p[1]*scopeTot*jf];});
-  var vt=vals.reduce(function(s,r){return s+r[1];},0)||1;
-  return vals.map(function(r){return [r[0],Math.round(r[1]/vt*scopeTot)];});
+  // Real rows only: the year-level source split for "all", the live monthly rows
+  // otherwise, and null when the pull didn't cover that scope — no estimated splits.
+  var yd=SESSIONSRC[brand]&&SESSIONSRC[brand][year];
+  if(!yd)return null;
+  if(month==="all")return (yd.sources||[]).map(function(r){return [r[0],r[1]];});
+  var mrows=yd.monthly&&yd.monthly[+month];
+  return mrows?mrows.map(function(r){return [r[0],r[1]];}):null;
 }
 function renderSimpleDetail(k){
   const panel=document.getElementById("simpleDetail"); if(!panel||panel.style.display==="none")return;
@@ -1843,7 +1892,6 @@ function renderSimpleDetail(k){
     const trafMonths=(B().ses&&B().ses[trafYear])?B().ses[trafYear].map((v,i)=>v!=null?i:null).filter(i=>i!=null):[];
     if(trafMonth!=="all"&&!trafMonths.includes(+trafMonth))trafMonth="all";
     const trafScope=(trafMonth==="all"?("Full year "+trafYear):(MONTHS[+trafMonth]+" "+trafYear));
-    const trafSynth=!(+trafYear===2026&&trafMonth==="all");
     const _selSty2='font-family:inherit;font-size:12.5px;font-weight:600;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:9px;padding:7px 11px;cursor:pointer';
     const _yBtns=trafYears.map(y=>'<button data-ty="'+y+'" class="'+(y===trafYear?'on':'')+'">'+y+'</button>').join("");
     const _mOpts='<option value="all"'+(trafMonth==="all"?" selected":"")+'>All months</option>'+trafMonths.map(i=>'<option value="'+i+'"'+(String(trafMonth)===String(i)?" selected":"")+'>'+MONTHS[i]+' '+trafYear+'</option>').join("");
@@ -1853,10 +1901,10 @@ function renderSimpleDetail(k){
     if(src.length){
       const tot=src.reduce((s,r)=>s+r[1],0)||1;
       srcHtml+='<div style="margin-top:34px"><h2 style="font-family:\'Fraunces\',serif;font-weight:600;font-size:20px;letter-spacing:-.01em">Website Traffic \u00b7 Sources \u00b7 '+trafScope+'</h2>';
-      srcHtml+='<div class="desc" style="margin:4px 0 16px">Where sessions came from \u00b7 '+trafScope+'.'+(trafSynth?' <b style="color:var(--accent)">Illustrative split</b> \u2014 monthly/annual source mix estimated from that period\u2019s session volume; only the 2026 full-period figure is from the live pull.':'')+'</div>';
+      srcHtml+='<div class="desc" style="margin:4px 0 16px">Where sessions came from \u00b7 '+trafScope+' \u00b7 live Shopify sessions by referrer.</div>';
       (function(){
         var r=104,th=34,C=2*Math.PI*r,cx=130,cy=130,W=260,H=260,acc=0;
-        var slices=src.map(function(rr,idx){var fr=tot?rr[1]/tot:0,start=acc;acc+=fr;return {name:rr[0],val:rr[1],fr:fr,start:start,color:srcColor(rr[0])||SPAL[idx%SPAL.length]};});
+        var slices=src.map(function(rr,idx){var fr=tot?rr[1]/tot:0,start=acc;acc+=fr;return {name:rr[0],val:rr[1],fr:fr,start:start,color:SPAL[idx%SPAL.length]};});
         var maxFr=slices.reduce(function(m,s){return Math.max(m,s.fr);},0)||1;
         var ring=slices.map(function(s,i){var len=s.fr*C;return '<circle class="donut-slice" data-i="'+i+'" data-th="'+th+'" data-val="'+s.val+'" data-pct="'+(s.fr*100).toFixed(1)+'" data-name="'+s.name.replace(/"/g,'&quot;')+'" cx="'+cx+'" cy="'+cy+'" r="'+r+'" fill="none" stroke="'+s.color+'" stroke-width="'+th+'" stroke-dasharray="'+len.toFixed(2)+' '+(C-len).toFixed(2)+'" stroke-dashoffset="'+(-s.start*C).toFixed(2)+'" transform="rotate(-90 '+cx+' '+cy+')" style="cursor:pointer;transition:opacity .2s,stroke-width .2s"></circle>';}).join("");
         var innerR=r-th/2-8;
@@ -1879,30 +1927,6 @@ function renderSimpleDetail(k){
         +'<div class="tile"><div class="tl">Total Traffic</div><div class="tv">'+int(ss)+'</div><div class="ts">website sessions</div></div>'
         +'<div class="tile"><div class="tl">Conversion Rate</div><div class="tv" style="color:var(--accent)">'+(conv!=null?conv.toFixed(2)+"%":"\u2013")+'</div><div class="ts">orders \u00f7 traffic</div></div>'
         +'</div></div>';
-      if(ss){
-        var isMY=/MY$/.test(state.brand)||state.brand==="MYALL";
-        var main,rest;
-        if(state.brand==="GROUP"){
-          main=[["Singapore",.46],["Malaysia",.40],["Indonesia",.03],["United States",.022],["Australia",.016]];
-          rest=[["Brunei",.012],["Philippines",.010],["United Kingdom",.008],["Japan",.006],["Thailand",.005],["United Arab Emirates",.004],["Canada",.0035],["Vietnam",.003],["Other",.020]];
-        } else if(isMY){
-          main=[["Malaysia",.80],["Singapore",.05],["Indonesia",.035],["Brunei",.022],["United States",.016]];
-          rest=[["Australia",.012],["Philippines",.010],["United Kingdom",.008],["Thailand",.007],["Japan",.006],["United Arab Emirates",.005],["Vietnam",.004],["China",.0035],["Other",.011]];
-        } else {
-          main=[["Singapore",.78],["Malaysia",.06],["United States",.035],["Australia",.022],["Indonesia",.018]];
-          rest=[["Philippines",.012],["United Kingdom",.010],["Japan",.008],["Canada",.007],["United Arab Emirates",.006],["Thailand",.005],["Vietnam",.004],["Germany",.0035],["New Zealand",.003],["Other",.006]];
-        }
-        var Sc=main.concat(rest).reduce(function(a,b){return a+b[1];},0)||1;
-        main=main.map(function(m){return [m[0],m[1]/Sc];});
-        rest=rest.map(function(m){return [m[0],m[1]/Sc];});
-        var restTotal=rest.reduce(function(a,b){return a+b[1];},0);
-        var CP=[AC(),"#D98240","#5F72A8","#2B2B2B","#7FA98F","#C7A76B"],restColor="#B8B2A6",maxFr=main[0][1];
-        html+='<div style="margin-top:34px"><h2 style="font-family:\'Fraunces\',serif;font-weight:600;font-size:20px;letter-spacing:-.01em">Sessions by Visitor Location \u00b7 '+trafScope+'</h2><div class="desc" style="margin:4px 0 16px">Sessions by visitor location \u00b7 '+trafScope+' \u2014 tap <b>Rest of world</b> for the international breakdown.</div><div style="max-width:560px">';
-        html+=main.map(function(m,i){var cnt=Math.round(ss*m[1]),bw=Math.max(3,m[1]/maxFr*100);return '<div style="display:flex;align-items:center;gap:12px;padding:9px 8px"><span style="width:12px;height:12px;border-radius:3px;background:'+CP[i%CP.length]+';flex:0 0 auto"></span><div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-family:Archivo;font-weight:700;font-size:13.5px;color:var(--ink)">'+m[0]+'</span><span style="font-family:Fraunces,serif;font-weight:700;font-size:15px;color:var(--ink)">'+(m[1]*100).toFixed(1)+'%</span></div><div style="display:flex;align-items:center;gap:9px;margin-top:6px"><div style="flex:1;height:7px;background:var(--paper2);border-radius:99px;overflow:hidden"><div style="height:100%;width:'+bw+'%;background:'+CP[i%CP.length]+';border-radius:99px"></div></div><span style="font-family:Archivo;font-size:11px;color:var(--muted);flex:0 0 auto">'+cnt.toLocaleString()+' sessions</span></div></div></div>';}).join('');
-        var subRows=rest.map(function(m){return '<div style="display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 2px;font-size:12.5px"><span>'+m[0]+'</span><span style="color:var(--muted)"><b style="color:var(--ink)">'+(m[1]*100).toFixed(2)+'%</b> \u00b7 '+Math.round(ss*m[1]).toLocaleString()+' sessions</span></div>';}).join('');
-        html+='<details class="ctry"><summary style="display:flex;align-items:center;gap:12px;padding:9px 8px"><span style="width:12px;height:12px;border-radius:3px;background:'+restColor+';flex:0 0 auto"></span><div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;align-items:baseline;gap:10px"><span style="font-family:Archivo;font-weight:700;font-size:13.5px;color:var(--ink)">Rest of world <span class="ctry-caret" style="color:var(--muted);font-size:11px">\u25B8</span></span><span style="font-family:Fraunces,serif;font-weight:700;font-size:15px;color:var(--ink)">'+(restTotal*100).toFixed(1)+'%</span></div><div style="display:flex;align-items:center;gap:9px;margin-top:6px"><div style="flex:1;height:7px;background:var(--paper2);border-radius:99px;overflow:hidden"><div style="height:100%;width:'+Math.max(3,restTotal/maxFr*100)+'%;background:'+restColor+';border-radius:99px"></div></div><span style="font-family:Archivo;font-size:11px;color:var(--muted);flex:0 0 auto">'+Math.round(ss*restTotal).toLocaleString()+' sessions</span></div></div></summary><div style="padding:8px 10px 10px 30px;background:var(--paper2);border-radius:10px;margin:4px 0 0"><div style="font-size:10.5px;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-bottom:4px">'+rest.length+' countries</div>'+subRows+'</div></details>';
-        html+='</div></div>';
-      }
     })();
     html+=srcHtml;
     }
@@ -2199,7 +2223,7 @@ function renderCustomers(){
   panel.querySelectorAll("#custView button").forEach(b=>b.onclick=()=>{custViewMode=b.dataset.cv;renderCustomers();});
   {const ys=panel.querySelector("#custYearSel");if(ys)ys.onchange=()=>{custYr=+ys.value;renderCustomers();};}
 }
-const SESSIONSRC={}; // [brand][year]={sources:[[name,sessions]],landing:[]} — filled from live pulls only
+const SESSIONSRC={}; // [brand][year]={sources:[[name,sessions]],landing:[[path,sessions]],monthly:{m:[[name,sessions]]}} — filled from live pulls only
 function renderSessions(){
   const panel=document.getElementById("sessPanel");if(!panel||panel.style.display==="none")return;
   const body=document.getElementById("sessBody"),foot=document.getElementById("sessFoot");if(sessChart){sessChart.destroy();sessChart=null;}
@@ -2257,10 +2281,8 @@ function renderFunnel(){
   addTile(tl,"Sessions Lost",int(lost),"left without buying");
   foot.textContent="Funnel for "+B().name+", "+y+". Each bar is scaled to its share of sessions; \u25bc marks the share carrying through to the next step. Sessions, cart-adds, checkouts and orders are all live Shopify data for 2026. The steepest drop is typically session \u2192 cart.";
 }
-const SALEMIX={}; // pulled from each brand's Shopify store by product tag containing 'sale'
+const SALEMIX={}; // {sku:{sale,full},[year]:{revSale,revFull,itemSale,itemFull}} — price-based markdown split from the live order pull
 let saleState={view:"sku",year:2025,period:"all"};
-/* Sale-campaign month windows (0-indexed). "all" = sale page always live (iORA MY). Brand listed with an array = restrict sale revenue/units to those months; sales outside count as full-price. Brands absent = tag-based estimate (awaiting campaign months from merchant). */
-const SALE_WINDOWS={MY:"all"};
 /* ---- Shared promotion title + mechanics helpers -------------------------------
    Turn a raw Shopify discount name ("MEGASAVE10", "2 FOR $29.90", "Buy 2, get
    RM20 off") into a readable title plus a plain-English mechanic. Uses the
@@ -2466,16 +2488,18 @@ function promoTypeLabel(t){t=String(t||"").toLowerCase();
 function promoCalHTML(yy){
   const bkey=state.brand,B_=B(),cur=B_.cur;
   const dm=(typeof DISC_MONTHLY!=="undefined"&&DISC_MONTHLY[bkey])?DISC_MONTHLY[bkey]:{};
-  const years=[2024,2025,2026].filter(y=>dm[y]||(B_.rev&&B_.rev[y]&&B_.rev[y].some(v=>v!=null)));
-  if(!years.includes(yy))yy=years.length?years[years.length-1]:2026;
+  const years=[2024,2025,2026].filter(y=>dm[y]&&dm[y].some(m=>m&&m.length));
+  if(!years.length)return {html:'<div class="empty">Per-promotion monthly data hasn\u2019t loaded for '+B_.name+' yet \u2014 it arrives with the live Shopify insights pull.</div>',foot:"",years:[],year:yy};
+  if(!years.includes(yy))yy=years[years.length-1];
   const m0=v=>cur.sym+Math.round(v).toLocaleString(cur.loc);
   const typeColor=t=>{t=String(t||"").toLowerCase();if(t.indexOf("code")>-1)return "#5F72A8";if(t.indexOf("bundle")>-1||t.indexOf("multi")>-1)return "#B5482E";if(t.indexOf("pwp")>-1||t.indexOf("gift")>-1)return "#0F7B6C";if(t.indexOf("member")>-1)return "#6B4E9E";if(t.indexOf("market")>-1)return "#ee4d2d";if(t.indexOf("clear")>-1)return "#c9820a";return AC();};
   let html='<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(225px,1fr));gap:14px">';
   let anyReal=false,anySynth=false;
+  const _now=new Date(),_nowY=_now.getFullYear(),_nowM=_now.getMonth();
   for(let i=0;i<12;i++){
     const rows=(dm[yy]&&dm[yy][i])?dm[yy][i]:null;
     const hasRev=B_.rev&&B_.rev[yy]&&B_.rev[yy][i]!=null;
-    const future=(yy===2026&&i>5);
+    const future=(yy>_nowY)||(yy===_nowY&&i>_nowM);
     let promos=[],synth=false;
     if(rows&&rows.length){promos=rows.map(r=>({name:r[0],rev:r[1],ord:r[2],given:r[3],type:r[4]}));anyReal=true;}
     promos.sort((a,b)=>(b.rev||0)-(a.rev||0));
@@ -2515,7 +2539,7 @@ function renderPromoCal(){
   const R=promoCalHTML(promoCalState.year);
   promoCalState.year=R.year;
   document.querySelectorAll("#promoCalYear button").forEach(b=>{const has=R.years.includes(+b.dataset.y);b.style.display=has?"":"none";b.classList.toggle("on",+b.dataset.y===R.year);});
-  document.getElementById("promoCalDesc").textContent=B().name+" \u2014 promotions run each month \u00b7 "+R.year+(R.year===2026?" (Jan\u2013Jun actual-to-date, later months planned)":"");
+  document.getElementById("promoCalDesc").textContent=B().name+" \u2014 promotions run each month \u00b7 "+R.year+(R.year===2026?" (actual-to-date, later months planned)":"");
   body.innerHTML=R.html;
   foot.innerHTML=R.foot;
   document.querySelectorAll("#promoCalYear button").forEach(b=>b.onclick=()=>{promoCalState.year=+b.dataset.y;renderPromoCal();});
@@ -2524,13 +2548,9 @@ function renderSaleMix(){
   const panel=document.getElementById("saleMixPanel");if(!panel||panel.style.display==="none")return;
   const body=document.getElementById("saleBody"),foot=document.getElementById("saleFoot"),ctr=document.getElementById("saleControls");
   if(saleChart){saleChart.destroy();saleChart=null;}
-  {const sd=document.getElementById("saleDesc");if(sd){var _showBundle=!/^(TRT|SANS|MONO)/.test(state.brand);sd.innerHTML='Split of items carrying a sale / clearance <b>tag</b> vs the rest \u2014 by SKU count, units sold, and revenue.'+(_showBundle?' This does not include multi-buy bundle deals such as 2 for $29.90 or 2 for $39.90.':'');}}
-  const reportBrand=["SG","MY","TRTSG","TRTMY"].includes(state.brand); /* iORA & TRT: daily sales report, sale revenue only (no quantity/SKU) */
-  const revOnly=reportBrand;
-  if(revOnly&&saleState.view!=="rev")saleState.view="rev";
-  document.querySelectorAll("#saleView button").forEach(b=>{b.style.display=(revOnly&&b.dataset.v!=="rev")?"none":"";});
-  document.querySelectorAll("#saleView button").forEach(b=>b.classList.toggle("on",b.dataset.v===saleState.view));
-  {const _seg=document.getElementById("saleView");if(_seg){const _ctrl=_seg.parentElement;if(_ctrl)_ctrl.style.display=revOnly?"none":"";}}
+  {const sd=document.getElementById("saleDesc");if(sd){var _showBundle=!/^(TRT|SANS|MONO)/.test(state.brand);sd.innerHTML='Split of items that sold <b>below their compare-at price</b> (marked down) vs full price, over the pulled range \u2014 by SKU count, units sold, and revenue.'+(_showBundle?' This does not include multi-buy bundle deals such as 2 for $29.90 or 2 for $39.90.':'');}}
+  document.querySelectorAll("#saleView button").forEach(b=>{b.style.display="";b.classList.toggle("on",b.dataset.v===saleState.view);});
+  {const _seg=document.getElementById("saleView");if(_seg){const _ctrl=_seg.parentElement;if(_ctrl)_ctrl.style.display="";}}
   const view=saleState.view,isSku=view==="sku";
   const monthOpts=[["all","All months"]].concat(MONTHS.map((mo,i)=>["m"+i,mo]));
   ctr.innerHTML='<div class="cmp-field"><label>Year</label><div class="selrow">'+buildSel("smY",yearOpts(),saleState.year)+'</div></div>'
@@ -2539,31 +2559,25 @@ function renderSaleMix(){
   const smM=document.getElementById("smM");if(smM)smM.onchange=e=>{saleState.period=e.target.value;renderSaleMix();};
   const D=SALEMIX[state.brand];
   if(!D){
-    body.innerHTML='<div class="empty" style="text-align:left;line-height:1.6">Sale vs full-price isn’t pulled for '+B().name+' yet. It’s read from Shopify by product tag — any SKU whose tags contain <b>“sale”</b> counts as sale-priced. It shows: <b>SKU share</b> (catalogue), <b>units sold</b> and <b>revenue</b> sale vs full-price, filterable by month/year. Connect this brand’s Shopify store and I’ll pull it.</div>';
-    foot.textContent="Source: Shopify product tags + sales by tag. Currency "+CUR.code+".";return;
+    body.innerHTML='<div class="empty" style="text-align:left;line-height:1.6">Sale vs full-price isn’t loaded for '+B().name+' yet. It’s computed from the live order pull — an order line counts as <b>sale</b> when it sold below its variant’s compare-at price. It shows: <b>SKU share</b>, <b>units sold</b> and <b>revenue</b> sale vs full-price, filterable by month/year. Connect this brand’s Shopify store and it populates automatically.</div>';
+    foot.textContent="Source: Shopify orders + variant compare-at prices. Currency "+CUR.code+".";return;
   }
   let pair,vname,scopeLbl,isRev=view==="rev";
   if(isSku){
     if(!D.sku){body.innerHTML='<div class="empty">SKU split not available.</div>';foot.textContent="";return;}
-    pair=[D.sku.sale,D.sku.full];vname="SKUs";scopeLbl="current catalogue";
+    pair=[D.sku.sale,D.sku.full];vname="SKUs";scopeLbl="SKUs sold in range";
   }else{
     const yd=D[saleState.year];
     if(!yd){body.innerHTML='<div class="empty">No '+saleState.year+' sale/full-price data for '+B().name+'.</div>';foot.textContent="";return;}
     const idx=(saleState.period==="all")?[...Array(12).keys()]:pIdx(saleState.period);
-    const win=SALE_WINDOWS[state.brand],restrict=win&&win!=="all";
     const saleA=yd[isRev?"revSale":"itemSale"]||[],fullA=yd[isRev?"revFull":"itemFull"]||[];
-    let s=0,f=0;idx.forEach(i=>{const sv=saleA[i],fv=fullA[i];if(sv!=null){(restrict&&!win.includes(i))?(f+=sv):(s+=sv);}if(fv!=null)f+=fv;});
+    if(saleState.period!=="all"&&idx.every(i=>saleA[i]==null&&fullA[i]==null)){body.innerHTML='<div class="empty">No '+pLabel(saleState.year,saleState.period)+' data in the pulled range for '+B().name+'.</div>';foot.textContent="";return;}
+    let s=0,f=0;idx.forEach(i=>{const sv=saleA[i],fv=fullA[i];if(sv!=null)s+=sv;if(fv!=null)f+=fv;});
     pair=[s,f];vname=isRev?"Revenue":"Units";
     scopeLbl=pLabel(saleState.year,saleState.period==="all"?"year":saleState.period);
   }
   const tot=pair[0]+pair[1],fmt=x=>isRev?moneyP(x):int(x),pc=(a)=>tot?(a/tot*100).toFixed(1)+"%":"–";
-  const _win=SALE_WINDOWS[state.brand],_restrict=_win&&_win!=="all";
-  const saleBanner=isSku?'':(_restrict
-      ?''
-      :(reportBrand?(isRev?'':'<div class="pbanner"><span>\u26a0</span><span>Sale revenue is captured from the daily sales report, but item <b>quantity</b> isn\u2019t recorded in the sheet, so there\u2019s no units/SKU split for this brand.</span></div>')
-      :'<div class="pbanner"><span>\u26a0</span><span>Tag-based estimate. '+B().name+' only opens its sale page during campaign periods, so months without a live sale are over-counted here. Tell me this brand\u2019s 2026 sale-campaign months and I\u2019ll restrict the sale figures to those windows.</span></div>'));
-  const modeNote=revOnly?'<div style="font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;text-align:center;margin:0 0 14px">Measured by revenue</div>':'';
-  body.innerHTML=saleBanner+modeNote+'<div class="tiles" id="saleTiles"></div><div id="saleBar" style="margin-top:20px"></div>';
+  body.innerHTML='<div class="tiles" id="saleTiles"></div><div id="saleBar" style="margin-top:20px"></div>';
   const tl=document.getElementById("saleTiles");
   addTile(tl,"Full-Price "+vname,fmt(pair[1]),pc(pair[1])+" of total");
   addTile(tl,"Sale "+vname,fmt(pair[0]),pc(pair[0])+" of total");
@@ -2572,9 +2586,7 @@ function renderSaleMix(){
   (function(){var host=document.getElementById("saleBar");if(!host)return;var fp=pair[1],sa=pair[0],fpP=tot?fp/tot*100:0,saP=tot?sa/tot*100:0,AC_=AC();
   var fpDeg=(fpP/100*360).toFixed(2),grad="var(--ink) 0deg "+fpDeg+"deg, "+AC_+" "+fpDeg+"deg 360deg";
   host.innerHTML=`<div style="display:flex;gap:34px;align-items:center;flex-wrap:wrap"><div style="width:184px;height:184px;border-radius:50%;background:conic-gradient(${grad});position:relative;flex:none;box-shadow:var(--shadow)"><div style="position:absolute;inset:31px;background:var(--surface);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center"><div style="font-family:'Fraunces',serif;font-weight:600;font-size:27px;line-height:1;color:${AC_}">${saP.toFixed(1)}%</div><div style="font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);font-weight:700;margin-top:4px">on sale</div></div></div><div style="flex:1;min-width:250px"><div style="display:grid;grid-template-columns:14px 1fr auto 62px;gap:12px;align-items:center;padding:0 0 8px;border-bottom:1px solid var(--line)"><span></span><span></span><span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700;text-align:right">${vname}</span><span style="font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700;text-align:right">Share</span></div><div style="display:grid;grid-template-columns:14px 1fr auto 62px;gap:12px;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)"><span style="width:12px;height:12px;border-radius:3px;background:var(--ink)"></span><span style="font-weight:600;font-size:14px">Full-Price</span><span style="font-size:13.5px;color:var(--muted);text-align:right">${fmt(fp)}</span><span style="font-weight:700;font-size:14px;text-align:right">${fpP.toFixed(1)}%</span></div><div style="display:grid;grid-template-columns:14px 1fr auto 62px;gap:12px;align-items:center;padding:12px 0"><span style="width:12px;height:12px;border-radius:3px;background:${AC_}"></span><span style="font-weight:600;font-size:14px">Sale</span><span style="font-size:13.5px;color:var(--muted);text-align:right">${fmt(sa)}</span><span style="font-weight:700;font-size:14px;text-align:right">${saP.toFixed(1)}%</span></div></div></div>`;})();
-  foot.textContent=(reportBrand&&isRev)
-    ?("Revenue sale vs full-price, "+scopeLbl+". \u201cSale\u201d = sale-item revenue in the "+B().name+" daily sales report (every \u2018Offer\u2019/\u2018Sale\u2019 line \u2014 iORA/LALU/SORA Offer, or TRT\u2019s per-category Sale rows; the \u2018Offer Total\u2019 subtotal and all discount-code/voucher lines are excluded); full-price = total sales \u2212 sale. "+((state.brand==="SG")?"Coverage: full 2024\u201325, plus 2026 Jan\u2013Jun; months with no offer show 0%.":(state.brand==="MY")?"Coverage: full 2024\u201325, plus 2026 Jan\u2013Jun.":"Coverage: 2024\u201326 from the TRT daily reports; months with no sale logged show 0%.")+" Currency "+CUR.code+".")
-    :(isSku?"SKU split is a current-catalogue snapshot (month/year filters apply to Units & Revenue). ":vname+" sale vs full-price, "+scopeLbl+". ")+"\u201cSale\u201d = SKU currently carrying a sale/clearance tag, "+(D.src||"")+". Note: matched on the product's current tag, so it counts a sale-tagged item even in a month it sold at full price \u2014 accurate for iORA MY (sale page always on), an over-estimate for the others. True markdown share needs order-line price-vs-compare-at. Currency "+CUR.code+".";
+  foot.textContent=(isSku?"SKU split covers the SKUs sold in the pulled range (month/year filters apply to Units & Revenue). ":vname+" sale vs full-price, "+scopeLbl+". ")+"\u201cSale\u201d = order line sold below its variant\u2019s current compare-at price (price-based markdown). The compare-at is today\u2019s catalogue value, so items re-priced since they sold can be misclassified. Currency "+CUR.code+".";
 }
 const BRAND_THEME={
   iora:{accent:"#1F4E79",soft:"#E1EAF3",paper:"#F4F6F9",paper2:"#ECEFF3",surface:"#FFFFFF",line:"#DAE1E9",g1:"#eef3f8",g2:"#e5edf5"},
@@ -3542,6 +3554,8 @@ function liveInfo(b) {
     settled: false,        // resolved (live or not-configured) — don't auto-retry
     winRange: null,        // "start|end" the current LIVE_WIN[b] was loaded for
     winLoading: false,     // a window fetch is in flight
+    retryTimer: null,      // pending auto-retry after a failed history load
+    failCount: 0,          // consecutive failed history loads (drives the backoff)
   });
 }
 // Current live window (year-to-date), shared across brands.
@@ -3653,15 +3667,21 @@ function markBrandLive(brand, ok) {
 function markComingSoonPanels(isLiveOk) {
   var SOON = [
     "chanPanel", "tgtPanel", "sessPanel", "funnelPanel", "saleMixPanel",
-    "discPanel", "catPanel", "catBestPanel", "galPanel",
+    "fcfPanel", "discPanel", "catPanel", "catBestPanel", "galPanel",
   ];
-  // A panel whose backing /api/insights section has loaded is live — no badge.
+  // A panel whose backing live section has loaded is live — no badge. Sections come
+  // from /api/insights (phase 3) except fulfillment/saleMix, which ride on the full
+  // /api/dashboard orders pull (phase 2); both merge into LIVE_EXTRAS.
   var HAS = {
     tgtPanel: "targets",
     discPanel: "discounts",
     catPanel: "categories",
     catBestPanel: "bestSellers",
     galPanel: "bestSellers",
+    funnelPanel: "funnel",
+    saleMixPanel: "saleMix",
+    fcfPanel: "fulfillment",
+    sessPanel: "traffic",
   };
   var extras = extrasOf();
   document.querySelectorAll(".cs-badge").forEach(function (n) { n.remove(); });
@@ -3669,7 +3689,9 @@ function markComingSoonPanels(isLiveOk) {
   SOON.forEach(function (id) {
     var p = document.getElementById(id);
     if (!p || p.style.display === "none") return;
-    if (HAS[id] && extras[HAS[id]]) return;
+    var have = HAS[id] && extras[HAS[id]];
+    if (id === "sessPanel") have = !!(extras.traffic && extras.traffic.byYear);
+    if (have) return;
     var tag = document.createElement("div");
     tag.className = "cs-badge";
     tag.textContent = "Coming soon";
@@ -3715,27 +3737,14 @@ var TODAY_STR = (function () {
   return d.getFullYear() + "-" + p(d.getMonth() + 1) + "-" + p(d.getDate());
 })();
 
-// Connection indicator for the initial live-data handshake. On the first visit
-// there's no timing history, so we show an indeterminate loading sweep; after a
-// successful connect we stash a (smoothed) duration in localStorage and use it to
-// drive a determinate progress bar with an estimated countdown next time. When the
-// API responds the bar fills and the dot glows green.
+// Connection indicator for the live-data handshake. Two states the user ever sees:
+// an amber spinner reading "Connecting…" and a green dot reading "Connected". A
+// failed load is NOT a terminal state — loadHistory() reschedules itself, so the
+// spinner simply keeps spinning until a load succeeds. The only quiet exception is a
+// store with no credentials in .env, which can't be retried into working.
 var ConnIndicator = (function () {
-  var EST_KEY = "iora_conn_est_ms";
-  var el, fill, label, dot, timer, startTs, estMs;
+  var el, label;
 
-  function readEst() {
-    var v = parseFloat((function () {
-      try { return localStorage.getItem(EST_KEY); } catch (e) { return null; }
-    })());
-    return v > 0 && v < 60000 ? v : 0; // sane bounds; ignore junk
-  }
-  function writeEst(ms) {
-    var prev = readEst();
-    // Exponential smoothing so one slow cold-start doesn't dominate the estimate.
-    var next = prev ? Math.round(prev * 0.5 + ms * 0.5) : ms;
-    try { localStorage.setItem(EST_KEY, String(next)); } catch (e) {}
-  }
   function ensure() {
     if (el && document.body.contains(el)) return;
     var slot = document.getElementById("tabBarStatus") ||
@@ -3743,70 +3752,47 @@ var ConnIndicator = (function () {
     el = document.createElement("div");
     el.id = "connBar";
     el.className = "conn";
-    el.innerHTML =
-      '<span class="conn-dot"></span>' +
-      '<div class="conn-track"><div class="conn-fill"></div></div>' +
-      '<span class="conn-label"></span>';
+    el.innerHTML = '<span class="conn-dot"></span><span class="conn-label"></span>';
     slot.appendChild(el);
-    fill = el.querySelector(".conn-fill");
     label = el.querySelector(".conn-label");
-    dot = el.querySelector(".conn-dot");
-  }
-  function tick() {
-    var elapsed = Date.now() - startTs;
-    // Cap at 95% until the response actually lands, so it never claims "done" early.
-    var pct = Math.min(95, (elapsed / estMs) * 100);
-    fill.style.width = pct.toFixed(1) + "%";
-    var remain = Math.ceil((estMs - elapsed) / 1000);
-    label.textContent = remain > 0 ? "Connecting · ~" + remain + "s" : "Almost there…";
   }
   function start() {
     ensure();
-    if (timer) { clearInterval(timer); timer = null; }
-    startTs = Date.now();
-    estMs = readEst();
-    if (estMs) {
-      el.className = "conn connecting";
-      fill.style.width = "0%";
-      tick();
-      timer = setInterval(tick, 100);
-    } else {
-      el.className = "conn indeterminate";
-      label.textContent = "Connecting…";
-    }
+    el.className = "conn connecting";
+    label.textContent = "Connecting…";
   }
-  // done(true)               -> connected, live figures on screen
-  // done(false, true)        -> store has no credentials in .env: muted, not an error
-  // done(false)              -> genuine failure (offline / auth / throttle)
+  // done(true)        -> connected, live figures on screen
+  // done(false, true) -> store has no credentials in .env: muted, not retryable
+  // done(false)       -> genuine failure; stay on the spinner, a retry is pending
   function done(ok, unconfigured) {
     ensure();
-    if (timer) { clearInterval(timer); timer = null; }
     if (ok) {
-      writeEst(Date.now() - startTs);
       el.className = "conn connected";
-      fill.style.width = "100%";
-      label.textContent = "Connected · live";
-      setTimeout(function () { if (el) el.classList.add("settled"); }, 2400);
+      label.textContent = "Connected";
     } else if (unconfigured) {
       el.className = "conn unconfigured";
-      fill.style.width = "100%";
       label.textContent = "Not set up · no data";
-      setTimeout(function () { if (el) el.classList.add("settled"); }, 2400);
     } else {
-      el.className = "conn failed";
-      fill.style.width = "100%";
-      label.textContent = "Offline · no data";
+      start();
     }
   }
   return { start: start, done: done };
 })();
 
-// Load a brand's full 2024–2026 history once (drives its chart + KPIs). No-ops once
-// the brand has settled (live or not-configured) or a load is already in flight.
+// Load a brand's full 2024–2026 history (drives its chart + KPIs). No fetch once the
+// brand has settled (live or not-configured) or a load is already in flight.
 function ensureHistory(brand) {
   if (!isLiveBrand(brand)) return;
   var info = liveInfo(brand);
-  if (!info.settled && !info.historyLoading) loadHistory(brand);
+  // Not resolved and nothing in flight — load now. This also pre-empts a pending
+  // retry timer, so selecting a failing brand retries it immediately.
+  if (!info.settled && !info.historyLoading) { loadHistory(brand); return; }
+  // Otherwise point the chip at the brand now on screen, rather than leaving it
+  // showing the previous brand's state.
+  if (brand === state.brand) {
+    if (info.settled) ConnIndicator.done(info.ok, !info.ok);
+    else ConnIndicator.start();
+  }
 }
 // Ensure a brand's live data is loaded. Called on brand selection. For an individual
 // store: load history + the default YTD window (vouchers + insights ride on it).
@@ -3821,14 +3807,34 @@ function ensureLive(brand) {
   if (info.winRange !== key && !info.winLoading) loadWindow(brand, curStart, curEnd);
 }
 
+// Keep retrying a failed history load, indefinitely, with a capped exponential
+// backoff (3s, 6s, 12s, 24s, then every 30s). A failure is never terminal: the
+// connection chip stays on its amber spinner until one of these attempts lands.
+// Not used for an unconfigured store — no amount of retrying supplies a token.
+var RETRY_MAX_MS = 30000;
+function scheduleHistoryRetry(brand) {
+  var info = liveInfo(brand);
+  if (info.retryTimer) return;
+  info.failCount = (info.failCount || 0) + 1;
+  var delay = Math.min(RETRY_MAX_MS, 3000 * Math.pow(2, info.failCount - 1));
+  info.retryTimer = setTimeout(function () {
+    var i = liveInfo(brand);
+    i.retryTimer = null;
+    if (!i.historyLoading && !i.settled) loadHistory(brand);
+  }, delay);
+}
+
 // FULL-HISTORY load — ShopifyQL-only `light` mode (one fast round trip per dataset,
 // no order pagination, so it can't cold-start-timeout). Populates BRANDS[brand] for
 // ALL years, so the year-on-year chart + KPIs always show 2024/2025/2026. Runs once
-// per brand (on launch for SG, on first select for the rest). The connection
-// indicator is only driven for the on-screen brand.
+// per brand (on launch for SG, on first select for the rest), then re-runs on the
+// backoff above until it succeeds. The connection indicator is only driven for the
+// on-screen brand.
 function loadHistory(brand) {
   var info = liveInfo(brand);
   var current = brand === state.brand;
+  // A manual/explicit load supersedes any pending retry for this brand.
+  if (info.retryTimer) { clearTimeout(info.retryTimer); info.retryTimer = null; }
   info.historyLoading = true;
   snapshotBaseline(brand);
   // On a retry after a partial payload, live figures are already on screen —
@@ -3856,6 +3862,7 @@ function loadHistory(brand) {
         } else {
           info.settled = true;
           info.histRetries = 0;
+          info.failCount = 0;
           if (partial && current) {
             setLiveStatus(
               "Some live figures couldn't load (Shopify rate limit) — refresh to retry.",
@@ -3874,16 +3881,17 @@ function loadHistory(brand) {
         // deliberately skipped rather than broken: leave every live figure blank
         // (dashes), settle it so we don't retry, and stay quiet — no warning banner.
         // The brand keeps its "soon" hint and the connection chip reads "Not set up",
-        // so the reason is still discoverable. Other reasons are real failures: they
-        // stay retryable and keep the warning.
+        // so the reason is still discoverable. Other reasons are real failures: the
+        // spinner keeps spinning and we retry on a backoff until one attempt lands.
         var unconfigured = reason === "not-configured";
         if (unconfigured) blankLive(brand, [2024, 2025, 2026]);
         else restoreBaseline(brand, [2024, 2025, 2026]);
         info.settled = unconfigured;
         markBrandLive(brand, false);
+        if (!unconfigured) scheduleHistoryRetry(brand);
         if (current) {
           setLiveStatus(
-            unconfigured ? "" : "Live data unavailable (" + reason + ") — figures left blank.",
+            unconfigured ? "" : "Live data unavailable (" + reason + ") — retrying…",
             unconfigured ? "" : "warn",
           );
           ConnIndicator.done(false, unconfigured);
@@ -3896,8 +3904,9 @@ function loadHistory(brand) {
       info.historyLoading = false; info.ok = false; info.settled = false;
       restoreBaseline(brand, [2024, 2025, 2026]);
       markBrandLive(brand, false);
+      scheduleHistoryRetry(brand);
       if (current) {
-        setLiveStatus("Live data unavailable (offline) — figures left blank.", "warn");
+        setLiveStatus("Live data unavailable (offline) — retrying…", "warn");
         ConnIndicator.done(false);
       }
       reRender();
@@ -3922,10 +3931,24 @@ function loadWindow(brand, start, end) {
   // burst is what throttles the sales dataset into dashes).
   setTimeout(function () {
 
+  // Shared: does a payload's per-section meta report a TRANSIENT failure (Shopify
+  // throttle / lookup timeout)? The server never edge-caches such payloads, so one
+  // delayed refetch usually completes the missing sections.
+  var transientSections = function (payload) {
+    var sm = payload && payload.meta && payload.meta.sections;
+    return !!sm && Object.keys(sm).some(function (k) {
+      var s = sm[k];
+      return s && s.ok === false && (s.reason === "throttle" || s.reason === "timeout");
+    });
+  };
+
   // Phase 2 (background, non-blocking): the Voucher metric has no ShopifyQL column,
   // so it needs the full Orders-API pull — and paging thousands of orders is the slow
   // part of a windowed load. We DON'T make anything wait on it; fire it off and
-  // merge `vou` into the Voucher metric whenever it lands.
+  // merge `vou` into the Voucher metric whenever it lands. The same pull now also
+  // carries the order-derived sections (pickup/delivery split + price-based sale
+  // mix), folded below.
+  var runPhase2 = function (attempt) {
   fetchJSON("/api/dashboard?" + qs)
     .then(function (payload) {
       var win = payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
@@ -3937,25 +3960,84 @@ function loadWindow(brand, start, end) {
           BRANDS[brand].vou[yr] = arr;
         });
         rebuildAggs();
-        if (brand === state.brand) reRender();
       }
-    })
-    .catch(function () {});
-
-  // Phase 3 (background, non-blocking): the insight sections — best sellers,
-  // discount codes, category mix, traffic attribution, targets — from
-  // /api/insights, one round trip. Applied whenever it lands: the affected
-  // panels refresh in place.
-  fetchJSON("/api/insights?" + qs)
-    .then(function (payload) {
-      if (!payload || !payload.sections) return;
-      applyExtras(brand, payload.sections, payload.meta && payload.meta.range);
+      // Order-derived sections → the panels' front-end containers, and MERGED into
+      // LIVE_EXTRAS so markComingSoonPanels sees them as live — phase 2 and phase 3
+      // land in either order, so neither may replace the other's sections.
+      var secs = payload && payload.sections;
+      if (secs && (secs.fulfillment || secs.saleMix)) {
+        var fold = {};
+        if (secs.fulfillment) {
+          PICKUP_DELIVERY[brand] = secs.fulfillment;
+          fold.fulfillment = secs.fulfillment;
+          fold.fulfillmentTruncated = !!(payload.meta && payload.meta.sections &&
+            payload.meta.sections.fulfillment && payload.meta.sections.fulfillment.truncated);
+        }
+        if (secs.saleMix) {
+          // renderSaleMix reads {sku:{...}, [year]:{revSale,...}} — the server's
+          // `years` map is spread to the top level of the container.
+          var sm = { sku: secs.saleMix.sku || null };
+          var smYears = Object.keys(secs.saleMix.years || {});
+          smYears.forEach(function (y) { sm[y] = secs.saleMix.years[y]; });
+          SALEMIX[brand] = sm;
+          if (smYears.length) saleState.year = +smYears[smYears.length - 1];
+          fold.saleMix = secs.saleMix;
+        }
+        LIVE_EXTRAS[brand] = Object.assign(LIVE_EXTRAS[brand] || {}, fold);
+      }
+      // Settle the fulfilment KPI's loading shimmer whether or not sections came
+      // back — resolved-with-nothing must read as pending, not spin forever.
+      liveInfo(brand).ordersExtrasDone = true;
       if (brand === state.brand) {
         reRender();
         markComingSoonPanels(!!liveInfo(brand).ok);
       }
+      // A throttled/timed-out section gets ONE delayed refetch — fresh attempt,
+      // since the server never caches transient-failure payloads.
+      if (attempt < 1 && transientSections(payload)) {
+        setTimeout(function () { runPhase2(attempt + 1); }, 8000);
+      }
     })
-    .catch(function () {});
+    .catch(function () {
+      liveInfo(brand).ordersExtrasDone = true;
+      if (brand === state.brand) reRender();
+    });
+  };
+  runPhase2(0);
+
+  // Phase 3 (background, non-blocking): the insight sections — best sellers,
+  // discount codes, category mix, traffic attribution, targets, funnel, monthly
+  // discounts/traffic, voucher report — from /api/insights, one round trip.
+  // Applied whenever it lands: the affected panels refresh in place.
+  var runPhase3 = function (attempt) {
+  fetchJSON("/api/insights?" + qs)
+    .then(function (payload) {
+      // Mark the pull as resolved either way, so loading shimmers (e.g. the Best
+      // Sellers KPI) settle into their real or pending state instead of spinning.
+      liveInfo(brand).extrasDone = true;
+      if (payload && payload.sections) {
+        applyExtras(brand, payload.sections, payload.meta && payload.meta.range);
+      }
+      if (brand === state.brand) {
+        reRender();
+        markComingSoonPanels(!!liveInfo(brand).ok);
+      }
+      // Sections lost to a ShopifyQL throttle get delayed refetches with widening
+      // spacing (the initial load fires ~17 analytics queries plus the orders pull,
+      // so the first attempt routinely loses tail sections; a later attempt on a
+      // quieter connection completes them). applyExtras merges, so already-loaded
+      // sections are kept and only the gaps fill in. The server never caches
+      // transient-failure payloads, so every refetch is a fresh attempt.
+      if (attempt < 3 && transientSections(payload)) {
+        setTimeout(function () { runPhase3(attempt + 1); }, 9000 * (attempt + 1));
+      }
+    })
+    .catch(function () {
+      liveInfo(brand).extrasDone = true;
+      if (brand === state.brand) reRender();
+    });
+  };
+  runPhase3(0);
 
   }, 1500); // end deferred phases 2 + 3
 
@@ -4013,7 +4095,9 @@ function loadWindow(brand, start, end) {
 // badge logic; the other sections are translated into the panels' existing data
 // containers so their renderers work unchanged.
 function applyExtras(brand, sections, range) {
-  LIVE_EXTRAS[brand] = sections || {};
+  // MERGE, never replace: fulfillment/saleMix arrive separately via the phase-2
+  // orders pull, and the two payloads land in either order.
+  LIVE_EXTRAS[brand] = Object.assign(LIVE_EXTRAS[brand] || {}, sections || {});
   const yr = +((range && range.end && range.end.slice(0, 4)) || new Date().getFullYear());
   // Targets → BRANDS[brand].targets (renderTargets + the chaser read B().targets[year]).
   if (sections && sections.targets) {
@@ -4060,6 +4144,50 @@ function applyExtras(brand, sections, range) {
     });
     catState.year = yr;
   }
+  // Conversion funnel → FUNNEL[brand][year] = {cart, checkout}. renderFunnel derives
+  // the purchase step from B().ord, so `converted` isn't needed client-side; a year
+  // is stored only when the ShopifyQL sessions dataset actually returned it.
+  const fu = sections && sections.funnel;
+  if (fu) {
+    FUNNEL[brand] = FUNNEL[brand] || {};
+    Object.keys(fu).forEach(function (y) {
+      if (fu[y] && (fu[y].cart || fu[y].checkout)) {
+        FUNNEL[brand][y] = { cart: fu[y].cart || null, checkout: fu[y].checkout || null };
+      }
+    });
+    if (fu[yr]) funnelState.year = yr;
+  }
+  // Per-month discount breakdown → DISC_MONTHLY[brand][year] — feeds the Promotion
+  // Calendar and the discount panel's month drill-down, so both show only the
+  // promotions Shopify actually recorded.
+  const dmn = sections && sections.discounts && sections.discounts.monthly;
+  if (dmn) {
+    DISC_MONTHLY[brand] = DISC_MONTHLY[brand] || {};
+    Object.keys(dmn).forEach(function (y) {
+      DISC_MONTHLY[brand][y] = dmn[y];
+    });
+    if (dmn[yr]) promoCalState.year = yr;
+  }
+  // Traffic by year → SESSIONSRC[brand][year] = {sources, landing, monthly}. The
+  // range-level landing pages attach to the range's end year; the monthly rows feed
+  // trafficSources(), so the sessions detail shows real splits only.
+  const tb = sections && sections.traffic && sections.traffic.byYear;
+  if (tb) {
+    SESSIONSRC[brand] = SESSIONSRC[brand] || {};
+    Object.keys(tb).forEach(function (y) {
+      if (!tb[y]) return;
+      SESSIONSRC[brand][y] = {
+        sources: tb[y].sources || [],
+        landing: (+y === yr && sections.traffic.landing) ? sections.traffic.landing : [],
+        monthly: tb[y].monthly || {},
+      };
+    });
+    if (tb[yr]) sessState.year = yr;
+  }
+  // The voucher report needs no translation — getVoucherUnit() reads it straight out
+  // of LIVE_EXTRAS — but remember the pulled range so the deck can label its
+  // reporting period (and pick the target year) honestly.
+  if (range) LIVE_EXTRAS[brand]._range = range;
 }
 
 // Re-check the "Coming soon" badges every time the visible panel set changes.

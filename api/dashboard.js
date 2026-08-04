@@ -17,8 +17,22 @@
 //   • vou                              — Orders API (gift-card/store-credit orders; ShopifyQL
 //     has no clean column for this).
 
-import { getConfig, envNames, fetchOrders, shopifyQL, ShopifyError } from "./_shopify.js";
-import { bucketOrders, monthsWithData, emptyYear, ORDER_METRICS } from "../lib/aggregate.js";
+import {
+  getConfig,
+  envNames,
+  fetchOrders,
+  fetchVariantCompareAt,
+  shopifyQL,
+  ShopifyError,
+} from "./_shopify.js";
+import {
+  bucketOrders,
+  buildFulfillmentSection,
+  buildSaleMixSection,
+  monthsWithData,
+  emptyYear,
+  ORDER_METRICS,
+} from "../lib/aggregate.js";
 import {
   buildSalesQL,
   buildSessionsQL,
@@ -42,6 +56,14 @@ function emptyMetrics(years) {
 
 const SHOP_TZ = "Asia/Singapore";
 const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
+
+// Per-section failure record for meta.sections — same convention as api/insights.js,
+// so the front-end reads one shape wherever a section is reported on.
+const failInfo = (e) => ({
+  ok: false,
+  reason: e instanceof ShopifyError ? e.reason : "error",
+  message: String(e?.message || e).slice(0, 400),
+});
 
 // Individual stores the dashboard can request live (one Shopify store each). The
 // front-end's roll-up brands (SGALL/MYALL/GROUP) are computed client-side from these,
@@ -107,15 +129,31 @@ export default async function handler(req, res) {
   try {
     // Try with customer data (new vs returning). If the app lacks protected-
     // customer-data approval, retry without it so the other metrics still load.
+    // The shipping address (delivery-region zips) is protected the same way, so it
+    // gets a fallback of its own. Order matters: the address field is approved
+    // separately from (and less commonly than) the customer block, so drop the
+    // ADDRESS first — a token approved for customer data but not addresses keeps its
+    // new-vs-returning split and only loses delivery regions. Ladder:
+    //   1. customer + address  →  2. customer only  →  3. neither.
     let includeCustomer = true;
+    let includeShipAddress = true;
     let result = { orders: [], truncated: false };
     if (!light) {
       try {
-        result = await fetchOrders(cfg, { start, end, includeCustomer });
+        result = await fetchOrders(cfg, { start, end, includeCustomer, includeShipAddress });
       } catch (e) {
         if (e instanceof ShopifyError && e.reason === "scope") {
-          includeCustomer = false;
-          result = await fetchOrders(cfg, { start, end, includeCustomer });
+          includeShipAddress = false;
+          try {
+            result = await fetchOrders(cfg, { start, end, includeCustomer, includeShipAddress });
+          } catch (e2) {
+            if (e2 instanceof ShopifyError && e2.reason === "scope") {
+              includeCustomer = false;
+              result = await fetchOrders(cfg, { start, end, includeCustomer, includeShipAddress });
+            } else {
+              throw e2;
+            }
+          }
         } else {
           throw e;
         }
@@ -175,6 +213,47 @@ export default async function handler(req, res) {
       if (!shopifyqlError) shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
     }
 
+    // Order-derived insight sections — FULL mode only (light mode never pages orders,
+    // so it cannot serve them and its response shape stays exactly as before). Both
+    // are computed from the SAME orders array already pulled above — no second pull.
+    // Each section is individually best-effort: a failure nulls that section and
+    // records why in meta.sections.<key>, never the whole payload. Runs AFTER the
+    // ShopifyQL calls so the compareAt lookup doesn't compete with them for cost budget.
+    let sections = null;
+    const sectionsMeta = {};
+    if (!light) {
+      sections = { fulfillment: null, saleMix: null };
+      // Pickup vs delivery split (+ pickup points, delivery districts). Pure local math.
+      try {
+        sections.fulfillment = buildFulfillmentSection(result.orders);
+        sectionsMeta.fulfillment = { ok: true, regions: includeShipAddress, truncated: result.truncated };
+      } catch (e) {
+        sectionsMeta.fulfillment = failInfo(e);
+      }
+      // Sale-vs-full-price mix: one batched compareAtPrice lookup over the DISTINCT
+      // variant ids actually seen in the pulled lines, then pure local classification.
+      // If the lookup fails, the section is null — classifying every line "full"
+      // without the catalogue join would be a made-up split, not a degraded one.
+      try {
+        const variantIds = [
+          ...new Set(
+            result.orders.flatMap((o) => (o.lines || []).map((l) => l.variantId).filter(Boolean)),
+          ),
+        ];
+        // 20s budget: keeps a huge catalogue's chunked lookup from pushing the whole
+        // invocation past Vercel's 60s ceiling — the section fails cleanly instead.
+        const compareAtByVariant = await fetchVariantCompareAt(cfg, variantIds, {
+          timeBudgetMs: 20000,
+        });
+        sections.saleMix = buildSaleMixSection(result.orders, compareAtByVariant, {
+          timeZone: SHOP_TZ,
+        });
+        sectionsMeta.saleMix = { ok: true, variants: variantIds.length, truncated: result.truncated };
+      } catch (e) {
+        sectionsMeta.saleMix = failInfo(e);
+      }
+    }
+
     // Did we actually obtain any live figures? In `light` mode nothing pages the
     // Orders API, so the outer try can't throw even when the token/domain are missing
     // or ShopifyQL is denied — every metric would just stay null. Reporting live:true
@@ -207,14 +286,24 @@ export default async function handler(req, res) {
     // Only a COMPLETE payload is edge-cached, and briefly (5 min) so the numbers stay
     // close to live. A partial one — e.g. the sales dataset throttled while sessions
     // landed — must never be cached: it would pin dashes on Sales Revenue / Order
-    // Count for every visitor until the cache expired.
-    const partial = salesSource !== "shopifyql" || !sessionsLive;
+    // Count for every visitor until the cache expired. Section failures only count
+    // as partial when they're TRANSIENT (throttle/timeout — a refetch can fix them);
+    // a deterministic failure (e.g. token lacks read_products, so saleMix can never
+    // load) must not make the store's every response uncacheable forever.
+    const transientSectionFail = Object.values(sectionsMeta).some(
+      (s) => s.ok === false && (s.reason === "throttle" || s.reason === "timeout"),
+    );
+    const partial =
+      salesSource !== "shopifyql" || !sessionsLive || transientSectionFail;
     res.setHeader(
       "Cache-Control",
       partial ? "no-store" : "public, s-maxage=300, stale-while-revalidate=600",
     );
     return res.status(200).json({
       SG: metrics,
+      // Order-derived sections ride along in FULL mode only; light responses keep
+      // their original shape (no `sections` key at all).
+      ...(light ? {} : { sections }),
       meta: {
         live: true,
         partial,
@@ -226,11 +315,13 @@ export default async function handler(req, res) {
         monthsLive: Object.fromEntries(years.map((y) => [y, monthsWithData(metrics.ord[y])])),
         light,
         includeCustomer: light ? false : includeCustomer,
+        includeShipAddress: light ? false : includeShipAddress,
         orderCount: result.orders.length,
         truncated: result.truncated,
         // Where the live sales/sessions numbers came from, so the header can be honest.
         salesSource, // "shopifyql" (exact, matches admin) | "reconstructed" (Orders fallback)
         sessionsLive, // true when Sessions/Conversion are live from ShopifyQL
+        ...(light ? {} : { sections: sectionsMeta }),
         ...(shopifyqlError ? { shopifyqlError } : {}),
       },
     });

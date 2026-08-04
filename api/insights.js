@@ -1,15 +1,17 @@
 // api/insights.js
 // Vercel serverless endpoint behind the dashboard's "insight" sections: best sellers
-// (by SKU + product title), discount-code performance, category mix (SKU-prefix map),
-// traffic attribution, and manually-maintained sales targets. Companion to
+// (by SKU + product title), discount-code performance (range + monthly), category mix
+// (SKU-prefix map), traffic attribution (range + monthly referrers + landing pages),
+// the conversion funnel, the voucher report, and manually-maintained sales targets.
+// Companion to
 // /api/dashboard (which serves the monthly metric series) — this one serves top-N
 // tables for a window, in ONE round trip, so the front-end fetches both in parallel.
 //
 // Query params (optional):
 //   ?brand=SG&start=YYYY-MM-DD&end=YYYY-MM-DD&limit=10   — limit clamped 1..50
 //
-// Every response is HTTP 200. Sections are BEST-EFFORT and independent: the six
-// ShopifyQL calls run in parallel (Promise.allSettled) and a failed call yields
+// Every response is HTTP 200. Sections are BEST-EFFORT and independent: the ten
+// ShopifyQL calls run through a width-2 pool (allSettled-shaped) and a failed call yields
 // sections.<x> = null plus a reason in meta.sections.<key> — the payload never 500s.
 // Targets come from lib/targets.js (local data, no Shopify) and are served even when
 // the brand has no Shopify credentials.
@@ -21,9 +23,14 @@ import {
   parseTopSkus,
   parseTopTitles,
   parseDiscountCodes,
+  parseDiscountMonthly,
   parseReferrers,
   parseOrderReferrers,
   parseCampaigns,
+  parseFunnel,
+  parseTrafficMonthly,
+  parseLandingPages,
+  buildVoucherReport,
   buildCategoryMix,
 } from "../lib/insights.js";
 import { CATEGORY_MAP } from "../lib/category-map.js";
@@ -57,7 +64,7 @@ const failInfo = (e) => ({
 });
 
 // Run thunks with limited concurrency, returning Promise.allSettled-shaped results.
-// Firing all six insight queries at once can trip Shopify's cost throttle — and take
+// Firing all ten insight queries at once can trip Shopify's cost throttle — and take
 // down /api/dashboard's sales query (fetched by the front-end at the same moment),
 // which is what blanks Sales Revenue / Order Count to dashes.
 async function settledPool(thunks, width) {
@@ -107,6 +114,8 @@ export default async function handler(req, res) {
     discounts: null,
     categories: null,
     traffic: null,
+    funnel: null,
+    voucherReport: null,
     targets,
   };
 
@@ -171,15 +180,36 @@ export default async function handler(req, res) {
       ? parseOrderReferrers(rowsByKey.orderReferrers)
       : null;
     const campaigns = rowsByKey.campaigns ? parseCampaigns(rowsByKey.campaigns, limit) : null;
+    const byYear = rowsByKey.trafficMonthly ? parseTrafficMonthly(rowsByKey.trafficMonthly) : null;
+    const landing = rowsByKey.landing ? parseLandingPages(rowsByKey.landing) : null;
+
+    // Monthly discount rows extend the discounts section; the voucher report is
+    // derived from the SAME two discount pulls (range totals + raw monthly rows for
+    // the active-month date labels) — no extra queries.
+    const discountMonthly = rowsByKey.discountMonthly
+      ? parseDiscountMonthly(rowsByKey.discountMonthly)
+      : null;
+    const voucherReport = rowsByKey.discountCodes
+      ? buildVoucherReport(rowsByKey.discountCodes, rowsByKey.discountMonthly)
+      : null;
 
     const sections = {
       // Composite sections are null only when ALL their sources failed.
       bestSellers: bySku || byTitle ? { bySku, byTitle, images } : null,
-      discounts: rowsByKey.discountCodes ? parseDiscountCodes(rowsByKey.discountCodes) : null,
-      categories,
-      traffic: referrers || orderReferrers || campaigns
-        ? { referrers, orderReferrers, campaigns }
+      discounts: rowsByKey.discountCodes || discountMonthly
+        ? {
+            ...(rowsByKey.discountCodes
+              ? parseDiscountCodes(rowsByKey.discountCodes)
+              : { codes: null, others: null, noCode: null }),
+            monthly: discountMonthly,
+          }
         : null,
+      categories,
+      traffic: referrers || orderReferrers || campaigns || byYear || landing
+        ? { referrers, orderReferrers, campaigns, byYear, landing }
+        : null,
+      funnel: rowsByKey.funnel ? parseFunnel(rowsByKey.funnel) : null,
+      voucherReport,
       targets,
     };
 
