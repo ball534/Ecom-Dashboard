@@ -43,6 +43,33 @@ import { CATEGORY_MAP } from "../lib/category-map.js";
 import { TARGETS, validateTargets, getTargets } from "../lib/targets.js";
 import { getConfig, envNames, resolveConfig } from "../api/_shopify.js";
 import { clearTokenCache, getAppCredentials } from "../api/_token.js";
+import { createHmac } from "node:crypto";
+import {
+  MONTHS_SHORT as ADS_MONTHS_SHORT,
+  mondayOf,
+  buildPlatformSeries,
+  buildCampaignRows,
+  resolveAdsYear,
+} from "../lib/ads.js";
+import { fetchMetaAds } from "../lib/ads-meta.js";
+import { fetchGoogleAds } from "../lib/ads-google.js";
+import { fetchTiktokAds } from "../lib/ads-tiktok.js";
+import {
+  buildChannelSeries,
+  buildChannelOrderCounts,
+  buildMarketplaceVouchers,
+  channelTotals,
+} from "../lib/marketplace.js";
+import { fetchShopeeOrders, shopeeWindows, shopeeConfig, shopeeSignForTest } from "../lib/shopee.js";
+import { fetchLazadaOrders, lazadaConfig, lazadaSignForTest } from "../lib/lazada.js";
+import { ApiError, requestJSON, deadline, settledPool, failInfo } from "../lib/http.js";
+import {
+  envIdValue,
+  envCredValue,
+  storeSuffix,
+  marketOf,
+  currencyOf,
+} from "../lib/env-keys.js";
 
 let passed = 0;
 const tests = [];
@@ -677,6 +704,435 @@ test("a store with neither a token nor app credentials stays unconfigured (no mi
     clearTokenCache();
   }
 });
+
+// ===========================================================================
+// Phases 1–3 (ad platforms) + phase 6 (marketplaces): the pure layers. No
+// network, no credentials — these prove the shapes the dashboard renders and,
+// above all, that "the platform didn't report this" stays null instead of 0.
+// ===========================================================================
+
+test("env keys: identifiers are per store, credentials fall back store -> market -> bare", () => {
+  const env = {
+    META_AD_ACCOUNT_IORASG: "act_111",
+    META_AD_ACCOUNT_MY: "act_222", // the plan's shorthand for iORA MY
+    META_AD_ACCOUNT_TRTSG: "act_333",
+    META_ACCESS_TOKEN: "shared",
+    META_ACCESS_TOKEN_SG: "sg-token",
+    META_ACCESS_TOKEN_MONOMY: "mono-token",
+  };
+  assert.equal(envIdValue(env, "META_AD_ACCOUNT", "SG"), "act_111");
+  assert.equal(envIdValue(env, "META_AD_ACCOUNT", "MY"), "act_222");
+  assert.equal(envIdValue(env, "META_AD_ACCOUNT", "TRTSG"), "act_333");
+  // No market-level fallback for an identifier: SANS SG must NOT inherit iORA SG's
+  // ad account, or one brand's spend would be reported as another's.
+  assert.equal(envIdValue(env, "META_AD_ACCOUNT", "SANSSG"), "");
+  // Credentials DO fall back: store -> market -> bare.
+  assert.equal(envCredValue(env, "META_ACCESS_TOKEN", "MONOMY"), "mono-token");
+  assert.equal(envCredValue(env, "META_ACCESS_TOKEN", "TRTSG"), "sg-token"); // market
+  assert.equal(envCredValue(env, "META_ACCESS_TOKEN", "TRTMY"), "shared"); // bare
+  assert.equal(storeSuffix("SG"), "IORASG");
+  assert.equal(storeSuffix("MONOMY"), "MONOMY");
+  assert.equal(marketOf("TRTMY"), "MY");
+  assert.equal(currencyOf("TRTMY"), "MYR");
+});
+
+test("mondayOf snaps any day to its ISO week Monday", () => {
+  assert.equal(mondayOf("2026-01-05"), "2026-01-05"); // a Monday
+  assert.equal(mondayOf("2026-01-11"), "2026-01-05"); // the Sunday after it
+  assert.equal(mondayOf("2026-01-12"), "2026-01-12");
+  assert.equal(mondayOf("2026-03-01"), "2026-02-23"); // month + Sunday boundary
+});
+
+test("buildPlatformSeries rolls days into months + Mon–Sun weeks, keyed by real month index", () => {
+  const rows = [
+    { date: "2026-01-05", campaign: "A", spend: 100, impressions: 1000, clicks: 50, purchases: 2, revenue: 400 },
+    { date: "2026-01-11", campaign: "A", spend: 50, impressions: 500, clicks: 25, purchases: 1, revenue: 200 },
+    { date: "2026-01-12", campaign: "B", spend: 25, impressions: 250, clicks: 10, purchases: 0, revenue: 0 },
+    { date: "2026-03-02", campaign: "A", spend: 10, impressions: 100, clicks: 5, purchases: 1, revenue: 90 },
+  ];
+  const s = buildPlatformSeries(rows, { year: 2026, supports: { purchases: true, revenue: true }, currency: "SGD" });
+  // February has no rows: it is ABSENT, not zero.
+  assert.deepEqual(s.months, ["Jan", "Mar"]);
+  assert.deepEqual(s.monthIndexes, [0, 2]);
+  assert.deepEqual(s.spend, [175, 10]);
+  assert.deepEqual(s.impr, [1750, 100]);
+  assert.deepEqual(s.purch, [3, 1]);
+  assert.deepEqual(s.rev, [600, 90]);
+  assert.equal(s.currency, "SGD");
+  assert.equal(s.year, 2026);
+  // Two weeks: 5–11 Jan (two rows) and 12–18 Jan, plus the March week.
+  assert.deepEqual(s.weekly.map((w) => w.w), ["2026-01-05", "2026-01-12", "2026-03-02"]);
+  assert.equal(s.weekly[0].spend, 150);
+  assert.equal(s.weekly[1].spend, 25);
+  // No budget is reported by any ad API, so the budget series and box stay null.
+  assert.equal(s.budget, null);
+  assert.equal(s.yearlyBudget, null);
+});
+
+test("buildPlatformSeries: an unreported metric is null for the whole series, never 0", () => {
+  const rows = [
+    { date: "2026-02-02", campaign: "A", spend: 10, impressions: 100, clicks: 5, purchases: 0, revenue: 0 },
+  ];
+  const s = buildPlatformSeries(rows, { year: 2026, supports: { purchases: false, revenue: false } });
+  assert.equal(s.purch, null);
+  assert.equal(s.rev, null);
+  assert.equal(s.weekly[0].purch, null);
+  assert.equal(s.weekly[0].rev, null);
+  assert.deepEqual(s.spend, [10]); // spend is still real
+});
+
+test("buildPlatformSeries filters to the requested year and returns null when nothing lands", () => {
+  const rows = [{ date: "2025-06-01", spend: 5, impressions: 1, clicks: 1, campaign: "A" }];
+  assert.equal(buildPlatformSeries(rows, { year: 2026 }), null);
+  assert.ok(buildPlatformSeries(rows, { year: 2025 }));
+});
+
+test("buildCampaignRows: one row per campaign, real first/last dates, null pu/rv preserved", () => {
+  const rows = [
+    { date: "2026-01-10", campaignId: "1", campaign: "Always On", spend: 100, impressions: 1000, clicks: 40, purchases: 2, revenue: 300 },
+    { date: "2026-02-14", campaignId: "1", campaign: "Always On", spend: 200, impressions: 2000, clicks: 80, purchases: 4, revenue: 700 },
+    { date: "2026-02-01", campaignId: "2", campaign: "Flash", spend: 400, impressions: 500, clicks: 20, purchases: 1, revenue: 100 },
+  ];
+  const out = buildCampaignRows(rows, { year: 2026, supports: { purchases: true, revenue: true } });
+  assert.equal(out.length, 2);
+  assert.equal(out[0].n, "Flash"); // sorted by spend desc
+  const always = out.find((r) => r.n === "Always On");
+  assert.equal(always.s, "2026-01-10");
+  assert.equal(always.e, "2026-02-14");
+  assert.equal(always.sp, 300);
+  assert.equal(always.pu, 6);
+  assert.equal(always.rv, 1000);
+  assert.equal(always.g, null);
+
+  const noConv = buildCampaignRows(rows, { year: 2026, supports: { purchases: false, revenue: false } });
+  assert.equal(noConv[0].pu, null);
+  assert.equal(noConv[0].rv, null);
+});
+
+test("resolveAdsYear clamps a multi-year range to its end year and says so", () => {
+  assert.deepEqual(resolveAdsYear("2026-01-01", "2026-08-06"), {
+    year: 2026, start: "2026-01-01", end: "2026-08-06", clamped: false,
+  });
+  assert.deepEqual(resolveAdsYear("2024-01-01", "2026-08-06"), {
+    year: 2026, start: "2026-01-01", end: "2026-08-06", clamped: true,
+  });
+});
+
+test("marketplace channel series: cancelled excluded, empty months null, not zero", () => {
+  const orders = [
+    { id: "1", date: "2026-01-05", total: 100, discount: 10, voucherCode: "A", cancelled: false },
+    { id: "2", date: "2026-01-20", total: 50, discount: null, voucherCode: null, cancelled: false },
+    { id: "3", date: "2026-02-01", total: 999, discount: 0, voucherCode: "A", cancelled: true }, // cancelled
+    { id: "4", date: "2026-03-03", total: 25.5, discount: 5, voucherCode: "B", cancelled: false },
+  ];
+  const s = buildChannelSeries(orders, { years: [2026] });
+  assert.equal(s[2026][0], 150);
+  assert.equal(s[2026][1], null, "a month whose only order was cancelled must be null, not 0");
+  assert.equal(s[2026][2], 25.5);
+  assert.equal(s[2026][11], null);
+  const counts = buildChannelOrderCounts(orders, { years: [2026] });
+  assert.equal(counts[2026][0], 2);
+  assert.equal(counts[2026][1], null);
+  const t = channelTotals(orders);
+  assert.equal(t.actual, 175.5);
+  assert.equal(t.orders, 3);
+  assert.equal(t.aov, 58.5);
+  // A year outside the request is not emitted.
+  assert.equal(buildChannelSeries(orders, { years: [2025] }), null);
+});
+
+test("marketplace voucher rows match the website report's contract, with unknown = null", () => {
+  const orders = [
+    { id: "1", date: "2026-01-05", total: 100, discount: 10, voucherCode: "SHOP10", cancelled: false },
+    { id: "2", date: "2026-03-20", total: 300, discount: 30, voucherCode: "SHOP10", cancelled: false },
+    { id: "3", date: "2026-02-02", total: 80, discount: null, voucherCode: "NODISC", cancelled: false },
+    { id: "4", date: "2026-02-02", total: 500, discount: 50, voucherCode: "SHOP10", cancelled: true },
+    { id: "5", date: "2026-02-02", total: 70, discount: 7, voucherCode: null, cancelled: false },
+  ];
+  const rows = buildMarketplaceVouchers(orders, { channel: "Shopee" });
+  assert.equal(rows.length, 2, "orders without a voucher code are not voucher rows");
+  const shop = rows.find((r) => r.title === "SHOP10");
+  assert.equal(shop.ch, "Shopee");
+  assert.equal(shop.sales, 400, "the cancelled order must not count");
+  assert.equal(shop.redeemed, 2);
+  assert.equal(shop.aov, 200);
+  assert.equal(shop.disc, 40);
+  assert.equal(shop.discPct, 9.09);
+  assert.equal(shop.date, "Jan – Mar");
+  assert.equal(shop.sent, null, "marketplaces do not report how many vouchers were issued");
+  assert.equal(shop.rate, null);
+  const nod = rows.find((r) => r.title === "NODISC");
+  assert.equal(nod.disc, null, "an unreported discount must stay null, never 0");
+  assert.equal(nod.discPct, null);
+  assert.equal(nod.date, "Feb");
+});
+
+test("shopeeWindows tiles a range into ≤15-day epoch windows covering every day", () => {
+  const w = shopeeWindows("2026-01-01", "2026-02-05");
+  assert.equal(w.length, 3);
+  // Contiguous and non-overlapping: each window starts the second after the last ended.
+  for (let i = 1; i < w.length; i++) {
+    assert.equal(w[i].time_from, w[i - 1].time_to + 1);
+  }
+  const day = 86400;
+  assert.ok(w[0].time_to - w[0].time_from < 15 * day, "window longer than Shopee's 15-day cap");
+  // First window starts at 00:00:00 SGT on the start date, last ends 23:59:59 on the end date.
+  assert.equal(new Date(w[0].time_from * 1000).toISOString(), "2025-12-31T16:00:00.000Z");
+  assert.equal(new Date(w[w.length - 1].time_to * 1000).toISOString(), "2026-02-05T15:59:59.000Z");
+});
+
+test("lazada signing: sorted key+value over the api path, HMAC-SHA256, upper hex", () => {
+  const cfg = lazadaConfig(
+    { LAZADA_APP_KEY: "key123", LAZADA_APP_SECRET: "secret456", LAZADA_ACCESS_TOKEN_SG: "tok" },
+    "SG",
+  );
+  assert.equal(cfg.host, "https://api.lazada.sg/rest");
+  assert.equal(cfg.appKey, "key123");
+  const params = { app_key: "key123", timestamp: "1700000000000", sign_method: "sha256", offset: 0 };
+  const got = lazadaSignForTest(cfg, "/orders/get", params);
+  const expected = createHmac("sha256", "secret456")
+    .update("/orders/getapp_keykey123offset0sign_methodsha256timestamp1700000000000")
+    .digest("hex")
+    .toUpperCase();
+  assert.equal(got, expected);
+  // A MY store resolves to the Malaysian host.
+  const my = lazadaConfig({ LAZADA_APP_KEY: "k", LAZADA_APP_SECRET: "s" }, "MONOMY");
+  assert.equal(my.host, "https://api.lazada.com.my/rest");
+});
+
+test("shopee signing: partner + path + timestamp (+ token + shop) keyed with the partner key", () => {
+  const cfg = shopeeConfig(
+    { SHOPEE_PARTNER_ID: "2000", SHOPEE_PARTNER_KEY: "pkey", SHOPEE_SHOP_ID_SG: "555" },
+    "SG",
+  );
+  assert.equal(cfg.shopId, "555");
+  const shopSign = shopeeSignForTest(cfg, "/api/v2/order/get_order_list", 1700000000, {
+    accessToken: "atok",
+    shopId: "555",
+  });
+  assert.equal(
+    shopSign,
+    createHmac("sha256", "pkey")
+      .update("2000/api/v2/order/get_order_list1700000000atok555")
+      .digest("hex"),
+  );
+  // Public (token) endpoints sign without the token/shop suffix.
+  const pubSign = shopeeSignForTest(cfg, "/api/v2/auth/access_token/get", 1700000000, {});
+  assert.equal(
+    pubSign,
+    createHmac("sha256", "pkey").update("2000/api/v2/auth/access_token/get1700000000").digest("hex"),
+  );
+});
+
+test("requestJSON: 401 fails fast, 429 retries then reports throttle, timeouts are typed", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response(JSON.stringify({ error: { message: "bad token" } }), { status: 401 });
+    };
+    await assert.rejects(
+      () => requestJSON("https://x.test/a", { label: "T", retries: 3 }),
+      (e) => e.reason === "auth" && /bad token/.test(e.message),
+    );
+    assert.equal(calls, 1, "an auth failure must not be retried");
+
+    calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response("slow down", { status: 429 });
+    };
+    await assert.rejects(
+      () => requestJSON("https://x.test/a", { label: "T", retries: 1 }),
+      (e) => e.reason === "throttle",
+    );
+    assert.equal(calls, 2, "a throttle must be retried once when retries:1");
+
+    // An API-level error inside a 200 body (TikTok/Lazada/Shopee style).
+    globalThis.fetch = async () => new Response(JSON.stringify({ code: 40105, message: "token" }), { status: 200 });
+    await assert.rejects(
+      () =>
+        requestJSON("https://x.test/a", {
+          label: "T",
+          retries: 0,
+          accept: (j) => {
+            if (j.code) throw new ApiError("auth", j.message);
+          },
+        }),
+      (e) => e.reason === "auth",
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("deadline throws a typed timeout so a paged pull fails instead of half-reporting", () => {
+  const d = deadline(0);
+  assert.throws(() => d.check("Shopee order list"), (e) => e.reason === "timeout");
+  const d2 = deadline(10000);
+  assert.doesNotThrow(() => d2.check("x"));
+  assert.ok(d2.remaining() > 0);
+});
+
+test("ad clients report an unconfigured brand as not-configured, naming the variables", async () => {
+  await assert.rejects(
+    () => fetchMetaAds({}, "TRTSG", { start: "2026-01-01", end: "2026-01-31" }),
+    (e) => e.reason === "not-configured" && /META_AD_ACCOUNT_TRTSG/.test(e.message),
+  );
+  await assert.rejects(
+    () => fetchGoogleAds({}, "SG", { start: "2026-01-01", end: "2026-01-31" }),
+    (e) => e.reason === "not-configured" && /GOOGLE_ADS_DEVELOPER_TOKEN/.test(e.message),
+  );
+  await assert.rejects(
+    () => fetchTiktokAds({}, "MY", { start: "2026-01-01", end: "2026-01-31" }),
+    (e) => e.reason === "not-configured" && /TIKTOK_ADVERTISER_MY/.test(e.message),
+  );
+  await assert.rejects(
+    () => fetchShopeeOrders({}, "SG", { start: "2026-01-01", end: "2026-01-31" }),
+    (e) => e.reason === "not-configured" && /SHOPEE_PARTNER_ID/.test(e.message),
+  );
+  await assert.rejects(
+    () => fetchLazadaOrders({}, "SG", { start: "2026-01-01", end: "2026-01-31" }),
+    (e) => e.reason === "not-configured" && /LAZADA_APP_KEY/.test(e.message),
+  );
+});
+
+test("Meta client maps a daily insights page into provider rows (stubbed HTTP)", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    const seen = [];
+    globalThis.fetch = async (url, opts) => {
+      seen.push({ url: String(url), auth: opts?.headers?.Authorization });
+      return new Response(
+        JSON.stringify({
+          data: [
+            {
+              date_start: "2026-01-05", date_stop: "2026-01-05",
+              campaign_id: "9", campaign_name: "Always On",
+              spend: "123.45", impressions: "10000", clicks: "400",
+              account_currency: "SGD",
+              actions: [
+                { action_type: "landing_page_view", value: "300" },
+                { action_type: "omni_purchase", value: "7" },
+                { action_type: "purchase", value: "7" },
+              ],
+              action_values: [{ action_type: "omni_purchase", value: "980.50" }],
+            },
+          ],
+        }),
+        { status: 200 },
+      );
+    };
+    const out = await fetchMetaAds(
+      { META_ACCESS_TOKEN: "tok", META_AD_ACCOUNT_SG: "111" },
+      "SG",
+      { start: "2026-01-01", end: "2026-01-31" },
+    );
+    assert.equal(out.currency, "SGD");
+    assert.deepEqual(out.supports, { purchases: true, revenue: true, budget: false });
+    assert.equal(out.rows.length, 1);
+    assert.deepEqual(out.rows[0], {
+      date: "2026-01-05", campaignId: "9", campaign: "Always On",
+      spend: 123.45, impressions: 10000, clicks: 400,
+      // ONE purchase action is taken (omni first), never the sum of overlapping types.
+      purchases: 7, revenue: 980.5,
+    });
+    assert.ok(/act_111\/insights/.test(seen[0].url), "bare account id must be normalized to act_<id>");
+    assert.equal(seen[0].auth, "Bearer tok", "the token goes in the header, not the query string");
+    assert.ok(!/access_token/.test(seen[0].url));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("TikTok client falls back to core metrics when the metric list is rejected, and says so", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    let attempt = 0;
+    globalThis.fetch = async (url) => {
+      attempt++;
+      const u = String(url);
+      if (/complete_payment/.test(u)) {
+        // First shape: TikTok rejects an unknown metric (HTTP 200, code != 0).
+        return new Response(JSON.stringify({ code: 40002, message: "Invalid metric: complete_payment" }), { status: 200 });
+      }
+      return new Response(
+        JSON.stringify({
+          code: 0,
+          data: {
+            list: [
+              {
+                dimensions: { campaign_id: "5", stat_time_day: "2026-01-05 00:00:00" },
+                metrics: { campaign_name: "TT Always On", spend: "50.5", impressions: "9000", clicks: "300" },
+              },
+            ],
+            page_info: { page: 1, total_page: 1 },
+          },
+        }),
+        { status: 200 },
+      );
+    };
+    const out = await fetchTiktokAds(
+      { TIKTOK_ACCESS_TOKEN: "tok", TIKTOK_ADVERTISER_SG: "adv1" },
+      "SG",
+      { start: "2026-01-01", end: "2026-01-31" },
+    );
+    assert.equal(out.supports.purchases, false);
+    assert.equal(out.supports.revenue, false);
+    assert.equal(out.rows.length, 1);
+    assert.equal(out.rows[0].date, "2026-01-05");
+    assert.equal(out.rows[0].spend, 50.5);
+    assert.equal(out.rows[0].purchases, null);
+    assert.equal(out.rows[0].revenue, null);
+    assert.ok(
+      out.notes.some((n) => /retried with spend\/impressions\/clicks/.test(n)),
+      "the fallback has to be stated in the notes the panel shows",
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("Lazada client maps /orders/get, excludes cancelled, keeps voucher codes", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    globalThis.fetch = async (url) => {
+      const u = new URL(String(url));
+      assert.ok(u.searchParams.get("sign"), "every Lazada call must be signed");
+      assert.equal(u.searchParams.get("sign_method"), "sha256");
+      return new Response(
+        JSON.stringify({
+          code: "0",
+          data: {
+            count: 2,
+            orders: [
+              { order_id: 1, created_at: "2026-01-05 12:00:00 +0800", price: "150.00", voucher: "15.00", voucher_code: "LAZ15", statuses: ["delivered"] },
+              { order_id: 2, created_at: "2026-01-06 12:00:00 +0800", price: "80.00", statuses: ["canceled"] },
+            ],
+          },
+        }),
+        { status: 200 },
+      );
+    };
+    const out = await fetchLazadaOrders(
+      { LAZADA_APP_KEY: "k", LAZADA_APP_SECRET: "s", LAZADA_ACCESS_TOKEN_SG: "tok" },
+      "SG",
+      { start: "2026-01-01", end: "2026-01-31" },
+    );
+    assert.equal(out.orders.length, 2);
+    assert.equal(out.orders[0].date, "2026-01-05");
+    assert.equal(out.orders[0].total, 150);
+    assert.equal(out.orders[0].voucherCode, "LAZ15");
+    assert.equal(out.orders[0].cancelled, false);
+    assert.equal(out.orders[1].cancelled, true);
+    // The cancelled order contributes nothing downstream.
+    assert.equal(buildChannelSeries(out.orders, { years: [2026] })[2026][0], 150);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 
 // ---- runner ----
 let failed = 0;

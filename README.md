@@ -31,17 +31,21 @@ will be added in later phases.
 A small status note in the header surfaces only problems (e.g. "Live data unavailable
 (reason)"); on success the live numbers simply appear (dashes while a request is in flight).
 
-### What is live vs. coming soon (Shopify-only phase)
+### What is live vs. coming soon
 
-| Live now (iORA SG, current year) | Coming soon (badged) |
-|---|---|
-| Revenue, Orders, Units, Discounts | Channel Mix (Shopee/Lazada/TikTok) |
-| **Sessions, Conversion** (ShopifyQL) | Sale vs Full-price |
-| Voucher orders, New vs Returning customers | Marketing funnel steps (cart/checkout breakdowns) |
-| At-a-Glance hero + Key Numbers | Ads spend / ROAS (needs ad-platform APIs) |
-| **Best Sellers (SKU + product), Category Mix** | The other 7 brands |
-| **Discount-code performance, Traffic attribution** | |
-| Sales Targets (from `lib/targets.js`, once filled in) | |
+Every panel below is wired to a first-party API. A source with no credentials set reports
+`reason:"not-configured"` and its panel stays blank — the dashboard shows no figure it
+cannot attribute to an API pull.
+
+| Live (given credentials) | Source | Still unwired |
+|---|---|---|
+| Revenue, Orders, Units, Discounts, Sessions, Conversion | Shopify (ShopifyQL) | Email / Dotdigital block (phase 4) |
+| Voucher orders, New vs Returning customers | Shopify Orders API | Voucher `sent` counts + redemption rate (phase 4) |
+| Best Sellers, Category Mix, Discount codes, Traffic attribution | `/api/insights` | Commission panels (phase 5 — internal eQuip) |
+| Funnel, Pick-up vs Delivery, Sale vs Full-price, Promotion Calendar, website Voucher report | `/api/insights` + `/api/dashboard` | Sales targets until `lib/targets.js` is filled in |
+| **Ads tab — Facebook, Google, TikTok** (spend, impressions, clicks, purchases, revenue, ROAS, campaigns) | `/api/ads` | Campaign creative thumbnails; planned budgets (no API reports either) |
+| **Channel Mix — Website / Shopee / Lazada** | `/api/marketplace` + Shopify | TikTok Shop (no connector) |
+| **Marketplace voucher rows** in the Voucher report | `/api/marketplace` | |
 
 ### UI: tabs + At-a-Glance (2026-07 redesign)
 
@@ -239,6 +243,41 @@ Resolved by `resolveConfig()` in `api/_shopify.js`. Notes:
 
 **Never commit `.env`** (it is gitignored, as is `oauth/`).
 
+### Environment variables — ads & marketplaces
+
+`/api/ads` and `/api/marketplace` use the **same store suffixes** as Shopify
+(`IORASG`, `IORAMY`, `TRTSG`, …). Two rules, implemented in `lib/env-keys.js`:
+
+- **Identifiers are per store, with no market fallback.** `META_AD_ACCOUNT_TRTSG` is read
+  only for TRT SG; SANS SG will *not* silently inherit iORA SG's ad account, because that
+  would report one brand's spend as another's. For the two iORA stores the plan's shorter
+  `_SG` / `_MY` spellings are accepted as well.
+- **Credentials fall back** store → market → bare: `META_ACCESS_TOKEN_TRTSG` →
+  `META_ACCESS_TOKEN_SG` → `META_ACCESS_TOKEN`, so one app token can serve every store.
+
+| Group | Variables | Notes |
+| --- | --- | --- |
+| Meta ads | `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_<STORE>`, `META_API_VERSION` | System-user token with `ads_read`; accounts may be comma-separated |
+| Google ads | `GOOGLE_ADS_DEVELOPER_TOKEN`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_REFRESH_TOKEN`, `_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CUSTOMER_<STORE>`, `GOOGLE_ADS_API_VERSION` | Developer token needs Basic access |
+| TikTok ads | `TIKTOK_ACCESS_TOKEN`, `TIKTOK_ADVERTISER_<STORE>`, `TIKTOK_API_VERSION`, `TIKTOK_METRICS`, `TIKTOK_REVENUE_METRIC` | The last two only matter if this API version renames its metrics |
+| Ad targets | `ADS_TARGET_ROAS`, `ADS_TARGET_CTR` | Optional. Blank ⇒ the "vs target" chips are hidden rather than compared against an invented target |
+| Shopee | `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY`, `SHOPEE_SHOP_ID_<STORE>`, `SHOPEE_ACCESS_TOKEN_<STORE>`, `SHOPEE_REFRESH_TOKEN_<STORE>`, `SHOPEE_HOST` | |
+| Lazada | `LAZADA_APP_KEY`, `LAZADA_APP_SECRET`, `LAZADA_ACCESS_TOKEN_<STORE>`, `LAZADA_REFRESH_TOKEN_<STORE>`, `LAZADA_HOST[_<STORE>]` | |
+| Token store | `TOKEN_STORE_URL`, `TOKEN_STORE_TOKEN` | **Required in production for Shopee/Lazada** — see below |
+
+#### Rotating marketplace tokens need a token store
+
+Shopify's grant can be re-run at will from `CLIENT_`/`SECRET_`, so it needs no storage.
+Shopee and Lazada are different: **every refresh invalidates the previous refresh token**
+and issues a new one. Env vars are read-only at runtime, so `lib/token-store.js` persists
+the live pair — to an Upstash-compatible Redis REST service if `TOKEN_STORE_URL` +
+`TOKEN_STORE_TOKEN` are set, otherwise to the instance's temp directory (survives warm
+invocations only), otherwise memory. `/api/marketplace` reports which backend is in use as
+`meta.tokenStore`, and `npm run preview-marketplace` prints it. Without Redis, a redeploy
+falls back to the seed token in the env — which by then is spent — and the pull fails with
+`reason:"auth"` telling you to re-authorize. Set the two variables before relying on
+Shopee/Lazada.
+
 ### Expiring tokens: the API mints its own
 
 Only **iORA SG**'s app issues a permanent `shpat_` token. The other seven stores' apps issue
@@ -284,9 +323,41 @@ node scripts/verify-token.js TRTSG   # any other store
 `oauth/main.py` is now redundant — kept only as a reference for the grant. It contains live
 client secrets, so `oauth/` is gitignored.
 
+### `/api/ads` and `/api/marketplace`
+
+`GET /api/ads?brand=SG&start=YYYY-MM-DD&end=YYYY-MM-DD` returns all three ad platforms in
+one round trip: `platforms.{fb,google,tiktok}` (monthly + Mon–Sun weekly series) and
+`campaigns.{…}` (one row per campaign), plus per-platform `meta.platforms.<key>` carrying
+`ok`/`reason`, the account currency, and **notes** — how a figure was obtained when the
+platform made it ambiguous (e.g. "TikTok revenue = value_per_complete_payment ×
+complete_payment", "Google figures use metrics.conversions"). Those notes render on the
+panel that shows the numbers. The Ads tab renders one calendar year at a time, so a range
+spanning years is clamped to its end year (`meta.range.clamped`) rather than merging two
+Januaries into one column. Selecting a year in the tab loads it.
+
+Things no ad API reports, and which the dashboard therefore leaves blank: **planned
+budgets** (so the Budget / Utilisation rows disappear rather than show dashes) and
+**performance targets** (`ADS_TARGET_*` above).
+
+`GET /api/marketplace?brand=SG&start=…&end=…` returns `channels.{Shopee,Lazada}` (monthly
+revenue + order counts) and `vouchers[]` in the same row shape as the website voucher
+report, so the deck renders both with one channel filter. Channel Mix's **Website** column
+is the store's own Shopify revenue series, joined client-side. The definitions differ and
+the panel says so: Website is ShopifyQL gross sales, marketplace figures are the
+buyer-paid order value each marketplace reports, cancelled and unpaid orders excluded.
+
+A marketplace pull that exceeds its 45-second budget **fails its channel** (`reason:
+"timeout"`) instead of serving the pages it managed — half a month of orders would
+understate a channel's revenue, and a wrong number is worse than a missing one.
+
 ## Verification checklist
 
-- `npm test` → all unit tests pass (Orders + ShopifyQL parsing).
+- `npm test` → all unit tests pass (Orders + ShopifyQL parsing, ads roll-ups, marketplace
+  aggregation, request/signing layers).
+- `npm run preview-ads [brand] [year]` → prints the Ads tab's figures per platform, or
+  `not-configured` per platform. Run it after adding each credential set.
+- `npm run preview-marketplace [brand] [year]` → prints Channel Mix months, marketplace
+  voucher rows, and which token-store backend is active.
 - `npm run verify-token` → ✅ the `shpat_` token authenticates against iORA SG.
 - `npm run verify-shopifyql` → ✅ `shopifyqlQuery` returns live sales + sessions; prints the
   lowest API version that works (pin `SHOPIFY_API_VERSION` to it).
@@ -309,7 +380,13 @@ client secrets, so `oauth/` is gitignored.
 
 ## Roadmap (next integrations)
 
-1. Shopify: products/best-sellers, category mix, traffic-source & funnel breakdowns (ShopifyQL
-   `GROUP BY` on sessions), full history.
-2. Sellercraft API (consolidates Shopee/Lazada/TikTok) → Channel Mix + marketplace revenue.
-3. Other brands (TRT, SANS, Monoloq) SG + MY; sales targets ingestion.
+See `INTEGRATION-PLAN.md` for the full state. Built: Shopify (phase 0), Meta / Google /
+TikTok ads (phases 1–3), Shopee + Lazada (phase 6). Remaining:
+
+1. **Phase 4 — email (Dotdigital or Klaviyo).** Lights up the Ads tab's email block and the
+   voucher report's `sent` counts / redemption rates, which currently render "—".
+2. **Phase 5 — commission (internal eQuip/ECM).** No public API known; ask IT for a
+   reporting endpoint or scheduled export, else a hand-maintained `lib/commission.js`
+   mirroring the `lib/targets.js` pattern.
+3. Fill `lib/targets.js` (no API needed — the target chaser and targets panel are wired and
+   waiting).

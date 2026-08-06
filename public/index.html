@@ -499,8 +499,12 @@ const DISC_PARTIAL={SANSSG:1,SANSMY:1,MONOSG:1,MONOMY:1}; // headline code only,
 const DISC_MONTHLY={};
 const TYPE_BADGE=t=>'<span style="display:inline-block;font-size:9.5px;letter-spacing:.08em;font-weight:700;text-transform:uppercase;padding:2px 7px;border-radius:999px;'+(t==="auto"?"background:var(--accent-soft);color:var(--accent)":t==="pos"?"background:#E7E1D3;color:#6B5E0E":"background:var(--paper2);color:var(--muted)")+'">'+(t==="auto"?"Auto":t==="pos"?"POS":"Code")+'</span>';
 const DISC_MECH={FIRST:"$3 off · min $20 · 1 use/customer","12OFF80":"$12 off · min $80 · 1 use/customer",TWENTYOFF:"$20 off · min $100",THIRTY8OFF:"$38 off · min $150",IORABD5:"$5 off · min $4.90 · 1 use",FLASHELEVEN:"$11 off · min $60 · 1 use",FLASHE11:"$11 off · min $60 · 1 use","11FLASH":"$11 off · min $60 · 1 use",OCT10:"$10 off · min $60 · 1 use",FLASH10:"$10 off · min $50 · 1 use",STORENEW:"$2.50 off",NOV8OFF:"$8 off · 1 use",NOVTENOFF:"$10 off · min $80 · 1 use",IORACONNECT5:"$5 off · 1 use",TESTING50:"50% off entire order","20OFFFEB24":"20% off · 1 use/customer",MNQAPR:"20% off · 1 use/customer",MNQAUG0:"20% off · 1 use/customer",MNQSEP0:"20% off · 1 use/customer",MNQSEP1:"20% off · 1 use/customer",MNQGOLD:"20% off · 1 use/customer",MNQOCT0:"20% off · 1 use/customer",MNQNOV0:"20% off · 1 use/customer",JUNE50:"RM50 off · min RM300 · 1 use",MAPR30:"RM30 off · 1 use",JULFLASH:"RM50 off · 1 use (cap 30)",JULYSPECIAL:"RM60 off · min RM400 · 1 use",MISSU30:"RM30 off · Aug target segment",MYMDK:"RM50 off · min RM300 (cap 100)",MNQRETAIL30:"RM30 off · min RM300 · Silver",MNQRETAIL50:"RM50 off · min RM300 · 2 segments",BACKUP30:"RM30 off · min RM300 · 1 use",BACKUP50:"RM50 off · min RM300 · 1 use","2 FOR $29.90":"Automatic · 2 items for $29.90","EXCLUSIVE PAIR $39.90":"Automatic · 2 items for $39.90","BUY 2, GET $10 OFF":"Automatic · $10 off when buying 2","RAYA 26 - 4 ITEMS - 18% OFF":"Automatic · 18% off 4+ items","RAYA 26 - 2 ITEMS - 12% OFF":"Automatic · 12% off 2+ items"}; // code(UPPER)->mechanics, pulled from Shopify discount summaries
-// Channel Mix — populate from the 9 daily-sales Excel workbooks:
-// CHANNELMIX[brand][year]={Website:[12],Shopee:[12],Lazada:[12],TikTok:[12]} (monthly revenue per channel).
+// Channel Mix — LIVE from /api/marketplace (Shopee + Lazada order pulls) merged with the
+// Shopify revenue series for the Website column. Shape:
+// CHANNELMIX[brand][year]={Website:[12],Shopee:[12],Lazada:[12]} (monthly revenue per channel).
+// Never seeded: a brand appears here only once its marketplace pull has landed, so the
+// panel shows the real split or nothing at all. CHAN_COV[brand][year]=[month indexes with
+// marketplace data], used to label how much of the year the split actually covers.
 const CHANNELMIX={};
 const CHAN_COV={};
 function aggBrand(members){
@@ -1159,10 +1163,13 @@ function voucherTheme(k){
 function getVoucherUnit(){
   const k=state.brand;
   if(VOUCH_STORE[k])return {key:k,store:VOUCH_STORE[k],rows:VOUCH_ROWS[k],cur:VOUCH_STORE[k].cur,brand:VOUCH_STORE[k].brand,dummy:false};
-  // Live voucher report from /api/insights (sections.voucherReport). Every figure is
-  // the API's own — anything it couldn't supply stays null and renders as "—".
+  // Live voucher report: website rows from /api/insights (sections.voucherReport) plus
+  // Shopee/Lazada rows from /api/marketplace. Every figure is the API's own — anything it
+  // couldn't supply stays null and renders as "—".
   const vr=extrasOf().voucherReport;
-  if(vr&&vr.rows&&vr.rows.length){
+  const mktRows=extrasOf().marketplaceVouchers||[];
+  const allRows=((vr&&vr.rows)||[]).concat(mktRows);
+  if(allRows.length){
     const rng=extrasOf()._range||null;
     const yr=(rng&&rng.end)?+rng.end.slice(0,4):(new Date()).getFullYear();
     const region=/MY$/.test(k)?"MY":"SG";
@@ -1171,10 +1178,12 @@ function getVoucherUnit(){
     const tg=B().targets&&B().targets[yr];
     if(tg){const tv=tg.filter(v=>v!=null);if(tv.length)target=tv.reduce((a,b)=>a+b,0);}
     return {key:k,
+      // The store line stays WEBSITE-only (Shopify gross sales for the window): mixing a
+      // marketplace's buyer-paid totals into it would change what the figure means.
       store:{brand:B().name.replace(/\s+(SG|MY)$/,""),region:region,cur:cur,target:target,
-             actual:(vr.store&&vr.store.actual!=null)?vr.store.actual:null,
-             aov:(vr.store&&vr.store.aov!=null)?vr.store.aov:null},
-      rows:vr.rows,cur:cur,brand:B().name,range:rng,live:true,dummy:false};
+             actual:(vr&&vr.store&&vr.store.actual!=null)?vr.store.actual:null,
+             aov:(vr&&vr.store&&vr.store.aov!=null)?vr.store.aov:null},
+      rows:allRows,cur:cur,brand:B().name,range:rng,live:true,dummy:false};
   }
   return null; // no shipped voucher report for this store — the tab shows an honest empty state
 }
@@ -1823,6 +1832,10 @@ function renderRevDetail(){
   {const rc=panel.querySelector("#revCmpSel");if(rc)rc.onchange=()=>{revCmp=rc.value;renderRevDetail();};}
   {const rta=panel.querySelector("#revMonthTA");if(rta)rta.onchange=()=>{revMonthSel=(rta.value==="all"?"all":+rta.value);renderRevDetail();};}
 }
+// Channel swatch colour, shared by the Channel Mix panel and the revenue detail's
+// channel doughnut. (The revenue detail referenced this before it existed — harmless
+// while CHANNELMIX was empty, a render-time throw the moment marketplace data landed.)
+function chanColor(n){return (typeof CHAN_COL!=="undefined"&&CHAN_COL[n])||"#7A7466";}
 let simpleView="month", simpleCmp="2026-2025";
 let trafYear=2026, trafMonth="all";
 function trafficSources(brand,year,month){
@@ -1972,7 +1985,7 @@ function renderChannel(){
     let bd=active.map(c=>{const a=evf(pair[0][0],y,c),b=evf(pair[1][0],y,c);return '<tr><td>'+c+'</td><td>'+moneyP(a)+'</td><td>'+moneyP(b)+'</td><td>'+(a===b?"–":(a>b?pair[0][1]:pair[1][1]))+'</td></tr>';}).join("");
     bd+='<tr class="total"><td>TOTAL</td><td>'+moneyP(tA)+'</td><td>'+moneyP(tB)+'</td><td>'+(tA>=tB?pair[0][1]:pair[1][1])+'</td></tr>';
     document.getElementById("chanTable").innerHTML=head+bd+"</tbody>";
-    foot.textContent=pair[0][1]+" vs "+pair[1][1]+" by channel, "+y+". Website = net web revenue; marketplace per the daily report. Currency "+CUR.code+".";
+    foot.textContent=pair[0][1]+" vs "+pair[1][1]+" by channel, "+y+". Website = Shopify gross sales; Shopee & Lazada = buyer-paid order value from each marketplace's API. Currency "+CUR.code+".";
     const s=document.getElementById("chanMode");if(s)s.querySelectorAll("button").forEach(b=>b.onclick=()=>{chanState.mode=b.dataset.v;renderChannel();});
     return;
   }
@@ -1985,15 +1998,15 @@ function renderChannel(){
   } else chanState.brand=null;
   const attach=()=>{if(isAll){const s=document.getElementById("chanBrand");if(s)s.onchange=()=>{chanState.brand=s.value;renderChannel();};const md=document.getElementById("chanMode");if(md)md.querySelectorAll("button").forEach(b=>b.onclick=()=>{chanState.mode=b.dataset.v;renderChannel();});}};
   const cm=CHANNELMIX[srcKey];
-  if(!cm){body.innerHTML=brandSel+'<div class="empty">Channel Mix data isn’t loaded for this selection.</div>';foot.textContent="Source: daily-sales Excel (marketplace revenue is not in Shopify).";attach();return;}
+  if(!cm){body.innerHTML=brandSel+'<div class="empty">Channel Mix data isn’t loaded for this selection.</div>';foot.textContent="Shopee + Lazada come from /api/marketplace; marketplace revenue is not in Shopify.";attach();return;}
   const yrs=Object.keys(cm).map(Number).sort((a,b)=>a-b);let y=chanState.year;if(!cm[y])y=yrs[yrs.length-1];
   document.querySelectorAll("#chanYear button").forEach(b=>{const has=!!cm[+b.dataset.y];b.style.display=has?"":"none";b.classList.toggle("on",+b.dataset.y===y);});
   const ev=c=>(cm[y][c]||[]).reduce((s,v)=>s+(v||0),0);
   const active=CHAN_KEYS.filter(c=>ev(c)>0),tot={};active.forEach(c=>tot[c]=ev(c));
   const grand=active.reduce((s,c)=>s+tot[c],0);
   if(!grand){body.innerHTML=brandSel+'<div class="empty">No channel revenue recorded for '+y+'.</div>';foot.textContent="";attach();return;}
-  const cov=((CHAN_COV[srcKey]||{})[y])||[],expected=(y>=2026)?6:12;
-  let covTxt=y+"";if(cov.length){covTxt=MONTHS[cov[0]]+"–"+MONTHS[cov[cov.length-1]]+" "+y;if(cov.length<expected)covTxt+=" only"+(y<=2025?" (H1 daily reports use a legacy format and weren’t parsed)":"");}
+  const cov=((CHAN_COV[srcKey]||{})[y])||[];
+  let covTxt=y+"";if(cov.length)covTxt=MONTHS[cov[0]]+"–"+MONTHS[cov[cov.length-1]]+" "+y+(cov.length<12?" (marketplace pull covers these months)":"");
   const label=isAll?((mems.find(m=>m[0]===srcKey)||["",""])[1]+". "):"";
   body.innerHTML=brandSel+'<div class="chart-box" style="height:clamp(250px,30vw,330px)"><canvas id="chanChart"></canvas></div><div class="tbl-wrap" style="margin-top:16px"><table id="chanTable"></table></div><div id="chanMonthlyWrap" style="margin-top:22px"></div>';
   attach();
@@ -2013,7 +2026,7 @@ function renderChannel(){
     mBd+='<tr class="total"><td>Revenue ('+CUR.code+')</td>'+monthIdxs.map(i=>{const mt=active.reduce((s,cc)=>s+((cm[y][cc]||[])[i]||0),0);return '<td>'+moneyP(mt)+'</td>';}).join("")+'</tr>';
     mw.innerHTML='<div class="eyebrow" style="display:block;margin-bottom:8px">Monthly Split · % of month revenue</div><div class="tbl-wrap" style="overflow-x:auto"><table>'+mHead+mBd+'</tbody></table></div>';
   }
-  foot.textContent=label+"Revenue by channel — "+covTxt+". Website = net web-channel (after discounts/refunds); marketplace = channel sales per the daily report. Monthly table below shows each channel's % share of that month's revenue. Source: daily-sales Excel. Currency "+CUR.code+".";
+  foot.textContent=label+"Revenue by channel — "+covTxt+". Website = Shopify gross sales (ShopifyQL); Shopee & Lazada = buyer-paid order value from each marketplace's own API, cancelled and unpaid orders excluded — close to, but not defined identically to, Shopify gross sales. Monthly table shows each channel's % share of that month's revenue. Currency "+CUR.code+".";
 }
 function cmpMembers(){const M={
   SGALL:[["iORA SG","SG",1],["TRT SG","TRTSG",1],["SANS SG","SANSSG",1],["Monoloq SG","MONOSG",1]],
@@ -2638,16 +2651,53 @@ function setBrand(b){applyBrandTheme(b);state.brand=b;CUR=BRANDS[b].cur;
   if(isAllG){selectMetric(state.metric);if(b==="GROUP")renderGroup();else renderCompare();}
   else{applyPanels();}
 }
-/* ================= ADS DASHBOARD ================= */
-const DOTD={}; // Dotdigital — no live source yet
-const ADS={fb:{},google:{},tiktok:{}}; // ad platforms — no live source yet
+/* ================= ADS DASHBOARD =================
+   Live from /api/ads (Meta Marketing API, Google Ads API, TikTok Business API).
+   ADS[platform][brand] holds one calendar year's monthly + weekly series and
+   CAMPAIGNS[platform][brand] its campaign rows — both exactly as the API served
+   them. Nothing here is seeded: a platform without credentials stays absent and
+   its card reads "No data", never a number.                                     */
+const DOTD={}; // Dotdigital — no live source yet (phase 4)
+const ADS={fb:{},google:{},tiktok:{}};
 const CAMPAIGNS={fb:{},google:{},tiktok:{}};
 const FB_CAMPAIGNS=CAMPAIGNS.fb;
-let adsState={gran:"month",ovGran:"month",ovYear:2026,bwMetric:"rv",ovMonth:"all",ovChan:"all",start:"2026-01-01",end:"2026-06-30",view:"overview",mode:"dashboard",sortK:"sp",sortD:-1};
-const ADS_MINDATE="2025-12-01",ADS_MAXDATE="2026-06-30";
+var ADS_THIS_YEAR=(new Date()).getFullYear();
+let adsState={gran:"month",ovGran:"month",ovYear:ADS_THIS_YEAR,bwMetric:"rv",ovMonth:"all",ovChan:"all",start:ADS_THIS_YEAR+"-01-01",end:null,view:"overview",mode:"dashboard",sortK:"sp",sortD:-1};
+// Date-picker bounds, replaced by the range /api/ads actually returned.
+var ADS_MINDATE=ADS_THIS_YEAR+"-01-01",ADS_MAXDATE=null;
 let topTabState="sales";
-const _AR={}; // no brand has a live ads source — renderAds shows the empty state
+// brand -> the key ADS/CAMPAIGNS are indexed by (the brand itself). Set only once a
+// live ads payload has landed for that brand; until then renderAds shows its empty state.
+const _AR={};
 function adsRegionFor(b){return _AR[b]||null;}
+// Display label for the ads header/titles: the brand's own name, not a market code.
+function adsBrandLabel(k){return (BRANDS[k]&&BRANDS[k].name)||k;}
+// Ad-performance targets have no API source. They are read from /api/ads meta only if
+// someone configures them (ADS_TARGET_ROAS / ADS_TARGET_CTR); otherwise the "vs target"
+// chips are hidden rather than measured against an invented number.
+var ADS_TARGETS={roas:null,ctr:null};
+// meta.platforms from the last /api/ads payload per brand — how each figure was obtained
+// (currency, which metric produced revenue, fallbacks taken). Shown to the user verbatim:
+// anything the API had to approximate must be visible on the panel that shows it.
+var ADS_META={};
+// "Facebook reports in MYR while this view is formatted in SGD" — or "" when every
+// connected account matches the store. Figures are never converted; the mismatch is named.
+function adsCurrencyWarning(){
+  var m=ADS_META[state.brand]||{},store=(m._storeCurrency||(CUR&&CUR.code)),out=[];
+  var NAME={fb:"Facebook",google:"Google",tiktok:"TikTok"};
+  ["fb","google","tiktok"].forEach(function(p){
+    var s=m[p];
+    if(s&&s.ok&&s.currency&&store&&s.currency!==store)out.push(NAME[p]+" reports in "+s.currency);
+  });
+  if(!out.length)return '';
+  return out.join("; ")+" — figures below are shown with the "+store+" symbol and are NOT converted.";
+}
+function adsNotesHTML(platform){
+  var m=(ADS_META[state.brand]||{})[platform];
+  var notes=(m&&m.notes)||[];
+  if(!notes.length)return '';
+  return '<div class="desc" style="padding:12px 16px 0;background:#fff">'+notes.join(' ')+'</div>';
+}
 function _pct(v){return v==null?"\u2013":(v*100).toFixed(1)+"%";}
 function _roas(v){return v==null?"\u2013":v.toFixed(2)+"\u00d7";}
 function _m0(v){return v==null?"\u2013":money(v);}
@@ -2666,13 +2716,17 @@ function _fmtWk(iso){var d=new Date(iso+"T00:00:00");return d.getDate()+" "+MONT
 function _tile(l,v){return '<div class="tile"><div class="tl">'+l+'</div><div style="font-family:Fraunces,serif;font-size:22px;font-weight:600;margin-top:4px;color:var(--ink)">'+v+'</div></div>';}
 var _MI={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 function _pdate(s){return new Date(s+"T00:00:00");}
+// The calendar year a platform's series covers — the API serves one year per pull, and
+// every month label/period below is anchored to it (never a hardcoded year).
+function adsYearOf(pf){return (pf&&pf.year)||adsState.ovYear||ADS_THIS_YEAR;}
 function adsPeriods(pf,gran){
   var s=adsState.start?_pdate(adsState.start):null,e=adsState.end?_pdate(adsState.end):null;
+  var YR=adsYearOf(pf);
   var out=[];
   if(gran==="year"){
     var mo=pf.months||[];
     if(!mo.length)return out;
-    var acc={label:"2026",budget:null,spend:null,impr:null,clicks:null,purch:null,rev:null};
+    var acc={label:String(YR),budget:null,spend:null,impr:null,clicks:null,purch:null,rev:null};
     ["budget","spend","impr","clicks","purch","rev"].forEach(function(k){
       var arr=pf[k];if(!arr)return;var t=0,any=false;
       mo.forEach(function(mn,i){if(arr[i]!=null){t+=arr[i];any=true;}});
@@ -2692,8 +2746,9 @@ function adsPeriods(pf,gran){
   }else{
     var mo=pf.months||[];
     mo.forEach(function(mn,i){
-      var mi=_MI[mn]; if(mi==null)mi=i;
-      var ms=new Date(2026,mi,1),me=new Date(2026,mi+1,0);
+      var mi=(pf.monthIndexes&&pf.monthIndexes[i]!=null)?pf.monthIndexes[i]:_MI[mn];
+      if(mi==null)mi=i;
+      var ms=new Date(YR,mi,1),me=new Date(YR,mi+1,0);
       if(s&&me<s)return; if(e&&ms>e)return;
       out.push({label:mn,budget:pf.budget?pf.budget[i]:null,spend:pf.spend?pf.spend[i]:null,impr:pf.impr?pf.impr[i]:null,
         clicks:pf.clicks?pf.clicks[i]:null,purch:pf.purch?pf.purch[i]:null,rev:pf.rev?pf.rev[i]:null});
@@ -2758,7 +2813,11 @@ function heatCell(v,mn,mx,dir,scale){
   return heatColor(v,mn,mx,dir);
 }
 function buildAdsTable(platform,pf,gran){
-  var P=adsPeriods(pf,gran);var R=[];
+  var P=adsPeriods(pf,gran);var R=[];var YR=adsYearOf(pf);
+  // No ad platform reports a PLANNED budget, so the Budget / Utilisation rows only
+  // appear when a budget actually came through — a row of dashes claims nothing but
+  // still implies the figure exists somewhere.
+  var hasBudget=P.some(function(p){return p.budget!=null;});
   function add(l,k,f,s,sc){R.push({t:'a',l:l,k:k,f:f,s:s||null,sc:sc||null});}
   function rat(l,nu,de,f,s,sc){R.push({t:'r',l:l,nu:nu,de:de,f:f,s:s||null,sc:sc||null});}
   // row order mirrors the sheet query: BUDGET, SPEND, UTILISATION %, IMPRESSIONS,
@@ -2768,16 +2827,16 @@ function buildAdsTable(platform,pf,gran){
     rat('CTR','clicks','impr',_pct);rat('CPC','spend','clicks',_m2);
     add('Revenue','rev',_m0);rat('ROAS','rev','spend',_roas);
   }else{
-    if(gran!=='week')add('Budget','budget',_m0);
+    if(gran!=='week'&&hasBudget)add('Budget','budget',_m0);
     add('Spend','spend',_m0);
-    if(gran!=='week')rat('Utilisation %','spend','budget',_pct,null,'util');
+    if(gran!=='week'&&hasBudget)rat('Utilisation %','spend','budget',_pct,null,'util');
     add('Impressions','impr',_i0);add('Clicks','clicks',_i0);
     rat('CTR','clicks','impr',_pct);rat('CPC','spend','clicks',_m2);
     add('Purchases','purch',_i0);rat('Cost per Purchase','spend','purch',_m2);
     add('Revenue','rev',_m0);rat('ROAS','rev','spend',_roas);
   }
   var lblHdr=(gran==='week')?'Week':'Month';
-  var perHdr=P.map(function(p){return (gran==='week')?('<th><div style="white-space:nowrap">'+p.label+'</div><div class="wkrange">'+p.range+'</div></th>'):('<th>'+monthFull(p.label)+' 2026</th>');}).join('');
+  var perHdr=P.map(function(p){return (gran==='week')?('<th><div style="white-space:nowrap">'+p.label+'</div><div class="wkrange">'+p.range+'</div></th>'):('<th>'+monthFull(p.label)+' '+YR+'</th>');}).join('');
   var head='<thead><tr><th>Total</th><th>Average</th><th>'+lblHdr+'</th>'+perHdr+'</tr></thead>';
   var body=R.map(function(r){
     var vals=P.map(function(p){return (r.t==='a')?p[r.k]:((p[r.nu]!=null&&p[r.de]!=null&&p[r.de]!==0)?p[r.nu]/p[r.de]:null);});
@@ -2947,11 +3006,21 @@ function dotdCampaignTable(region){
   return '<div class="ads-band">Campaign breakdown \u00b7 '+der.length+' sends</div>'
     +'<div class="tbl-wrap camptbl" style="max-height:620px;overflow:auto;background:#fff"><table style="min-width:1080px">'+head+'<tbody>'+totRow+body+'</tbody></table></div>';
 }
-var ADS_TARGETS={roas:5.0,ctr:0.015};
 var OV_CHANS=[["all","All paid"],["fb","Facebook"],["google","Google"],["tiktok","TikTok"]];
+// Which calendar year the currently loaded ads payload covers for this brand (null until
+// one lands). Everything below compares the year the user picked against THIS, so no
+// figure is ever shown under the wrong year's heading.
+function adsYearLoaded(region){
+  var y=null;
+  ["fb","google","tiktok"].forEach(function(p){
+    var pf=ADS[p]&&ADS[p][region];
+    if(y==null&&pf&&pf.year!=null)y=+pf.year;
+  });
+  return y;
+}
 function ovMonthList(region){
   var set={};
-  if((adsState.ovYear||2026)!==2026)return [];
+  if(adsYearLoaded(region)!==(adsState.ovYear||ADS_THIS_YEAR))return [];
   ["fb","google","tiktok"].forEach(function(p){
     var pf=ADS[p]&&ADS[p][region];
     if(!pf||!pf.months)return;
@@ -2965,7 +3034,7 @@ function ovMonthList(region){
 }
 function adsSummaryFiltered(platform,region){
   var pf=ADS[platform]&&ADS[platform][region];
-  if((adsState.ovYear||2026)!==2026)return {spend:null,rev:null,purch:0,budget:null,impr:0,clicks:0,n:0,roas:null,ctr:null,cpp:null,util:null};
+  if(adsYearLoaded(region)!==(adsState.ovYear||ADS_THIS_YEAR))return {spend:null,rev:null,purch:0,budget:null,impr:0,clicks:0,n:0,roas:null,ctr:null,cpp:null,util:null};
   var mo=adsState.ovMonth||"all";
   var t={spend:null,rev:null,purch:0,budget:null,impr:0,clicks:0,n:0};
   if(!pf||!pf.months)return t;
@@ -2986,11 +3055,12 @@ function adsSummaryFiltered(platform,region){
   t.util=(t.budget&&t.spend!=null)?t.spend/t.budget:null;
   return t;
 }
-var ADS_YEARS=[2024,2025,2026];
-var ADS_DATA_YEAR=2026;
+// Years the year selector offers. Ads are fetched one year at a time, on demand, so this
+// is simply the years the dashboard covers — with the current year first-loaded.
+var ADS_YEARS=[ADS_THIS_YEAR-2,ADS_THIS_YEAR-1,ADS_THIS_YEAR];
 function ovAggregate(region){
   var chan=adsState.ovChan||"all", mo=adsState.ovMonth||"all";
-  if((adsState.ovYear||ADS_DATA_YEAR)!==ADS_DATA_YEAR)
+  if(adsYearLoaded(region)!==(adsState.ovYear||ADS_THIS_YEAR))
     return {spend:0,budget:0,impr:0,clicks:0,purch:0,rev:0,any:false,anyB:false,roas:null,ctr:null,cpc:null,cpp:null,util:null,noYear:true};
   var plats=(chan==="all")?["fb","google","tiktok"]:[chan];
   var t={spend:0,budget:0,impr:0,clicks:0,purch:0,rev:0,any:false,anyB:false};
@@ -3048,9 +3118,9 @@ function ovFilters(region){
     +months.map(function(m){return '<button data-m="'+m+'" class="'+(mo===m?"on":"")+'">'+m.toUpperCase()+'</button>';}).join('')+'</div>';
   var chanSeg='<div class="seg" id="ovChan">'+OV_CHANS.map(function(c){
       return '<button data-c="'+c[0]+'" class="'+(ch===c[0]?"on":"")+'">'+c[1]+'</button>';}).join('')+'</div>';
-  var yr=adsState.ovYear||ADS_DATA_YEAR;
+  var yr=adsState.ovYear||ADS_THIS_YEAR,loaded=adsYearLoaded(region);
   var yearSeg='<div class="seg" id="ovYear">'+ADS_YEARS.map(function(y){
-      return '<button data-y="'+y+'" class="'+(y===yr?"on":"")+'" title="'+(y===ADS_DATA_YEAR?"":"No ad data loaded for "+y)+'">'+y+'</button>';}).join('')+'</div>';
+      return '<button data-y="'+y+'" class="'+(y===yr?"on":"")+'" title="'+(y===loaded?"":"Loads "+y+" from the ad platforms")+'">'+y+'</button>';}).join('')+'</div>';
   return '<div style="display:flex;flex-wrap:wrap;gap:22px;align-items:flex-end;padding:16px 18px;background:var(--paper2);border:1px solid var(--line);border-radius:16px;margin-bottom:20px">'
     +grp("Year",yearSeg)+grp("Month",monthSeg)+grp("Channel",chanSeg)+'</div>';
 }
@@ -3065,26 +3135,30 @@ function renderAdsOverview(region,gran){
   var A=ovAggregate(region);
   var mo=adsState.ovMonth||"all", ch=adsState.ovChan||"all";
   var chName=(OV_CHANS.filter(function(c){return c[0]===ch;})[0]||["all","All paid"])[1];
-  var _yr=adsState.ovYear||ADS_DATA_YEAR;
+  var _yr=adsState.ovYear||ADS_THIS_YEAR;
   var scopeTxt=(mo==="all"?("full year "+_yr):monthFull(mo)+" "+_yr)+" \u00b7 "+chName;
   var h='';
   h+=ovFilters(region);
   if(A.noYear){
-    return h+'<div class="empty" style="margin-top:4px">No ad performance data loaded for '+_yr+'. Facebook, Google and TikTok history currently starts in '+ADS_DATA_YEAR+'.</div>';
+    var _li=(LIVE[state.brand]||{});
+    return h+'<div class="empty" style="margin-top:4px">'+(_li.adsLoading
+      ? 'Loading '+_yr+' from the ad platforms\u2026'
+      : 'No ad performance data for '+_yr+'. Pick a year the connected ad accounts cover.')+'</div>';
   }
   var utilChip=A.util==null?'':(A.util<=1?ovChip("on track","good"):ovChip("over budget","bad"));
-  var roasDelta=(A.roas!=null)?(A.roas-ADS_TARGETS.roas):null;
+  // Targets are only compared against when one is genuinely configured (see ADS_TARGETS).
+  var roasDelta=(A.roas!=null&&ADS_TARGETS.roas!=null)?(A.roas-ADS_TARGETS.roas):null;
   var roasChip=roasDelta==null?'':ovChip((roasDelta>=0?"\u25b2 +":"\u25bc ")+roasDelta.toFixed(1)+"x vs target",roasDelta>=0?"good":"bad");
-  var ctrDelta=(A.ctr!=null)?((A.ctr-ADS_TARGETS.ctr)*100):null;
+  var ctrDelta=(A.ctr!=null&&ADS_TARGETS.ctr!=null)?((A.ctr-ADS_TARGETS.ctr)*100):null;
   var ctrChip=ctrDelta==null?'':ovChip((ctrDelta>=0?"\u25b2 +":"\u25bc ")+ctrDelta.toFixed(1)+"pp vs target",ctrDelta>=0?"good":"bad");
   var _M=function(v){return v==null?"\u2013":(v>=1e6?(v/1e6).toFixed(2)+"M":_i0(v));};
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:26px">'
     +ovCard("Ad Spend",_m0(A.any?A.spend:null),A.anyB?("of "+_m0(A.budget)+" budget"):"","","#C2661C")
     +ovCard("Budget Utilisation",A.util!=null?(A.util*100).toFixed(2)+"%":"\u2013","",utilChip,"#C2661C")
     +ovCard("Revenue",_m0(A.any?A.rev:null),"","","#1F5C9E")
-    +ovCard("ROAS",_roas(A.roas),"target "+ADS_TARGETS.roas.toFixed(1)+"x",roasChip,"#1F5C9E")
+    +ovCard("ROAS",_roas(A.roas),ADS_TARGETS.roas!=null?("target "+ADS_TARGETS.roas.toFixed(1)+"x"):"revenue ÷ spend",roasChip,"#1F5C9E")
     +ovCard("Impressions",_M(A.impr),"","","#6E6E78")
-    +ovCard("CTR",_pct(A.ctr),"target "+(ADS_TARGETS.ctr*100).toFixed(2)+"%",ctrChip,"#6E6E78")
+    +ovCard("CTR",_pct(A.ctr),ADS_TARGETS.ctr!=null?("target "+(ADS_TARGETS.ctr*100).toFixed(2)+"%"):"clicks ÷ impressions",ctrChip,"#6E6E78")
     +ovCard("CPC",_m2(A.cpc),"cost / click","","#2E7D6B")
     +ovCard("Purchases",_i0(A.purch),A.cpp!=null?(_m2(A.cpp)+" / purchase"):"","","#2E7D6B")
     +'</div>';
@@ -3092,7 +3166,7 @@ function renderAdsOverview(region,gran){
   h+='<div style="font-size:11px;font-weight:800;letter-spacing:1px;text-transform:uppercase;color:var(--muted);margin:46px 2px 16px">By platform <span style="color:var(--accent);font-weight:600;text-transform:none;letter-spacing:0">\u2014 tap a card for the full breakdown</span></div>';
   h+='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:20px;margin-bottom:8px">';
   var _dd=(adsState.ovChan==="all")?dotdOverviewSummary(region):{n:0};
-  if(adsState.ovChan==="all"&&(adsState.ovYear||2026)===2026){
+  if(adsState.ovChan==="all"&&Object.keys(DOTD).length){
     sums=sums.concat([{key:"dotd",name:"Dotdigital",color:"#2E7D6B",s:null,dd:_dd}]);
   }
   h+=sums.map(function(x){
@@ -3139,8 +3213,8 @@ function bestWorstSection(platform,region){
   }else{
     rows=campaignRows(platform,region).map(function(c){
       return {n:c.n,s:c.s,e:c.e,g:c.g||null,rv:c.rv,im:c.im,
-              roas:(c.sp>0?c.rv/c.sp:null),
-              sub:money(c.sp)+" spend \u00b7 "+int(c.im)+" impressions"};});
+              roas:(c.sp>0&&c.rv!=null)?c.rv/c.sp:null,
+              sub:_m0(c.sp)+" spend \u00b7 "+_i0(c.im)+" impressions"};});
   }
   rows=rows.filter(function(r){return r[mk]!=null&&isFinite(r[mk]);});
   if(mk==="roas")rows=rows.filter(function(r){return r.rv>0;});
@@ -3182,13 +3256,17 @@ function bestWorstSection(platform,region){
 function campaignSection(platform,region){
   var rows=campaignRows(platform,region);
   var _fullify=function(t){return String(t).replace(/\b(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\b(?!\w)/g,function(mm){return MONTHS_FULL[_MSHORT[mm]];});};
-  var noteMap={google:'Google runs a single always-on PMAX campaign, so rows are grouped by month rather than by campaign.',
-               tiktok:'TikTok launched in June 2026, so the campaign history is still short.',fb:''};
-  var note=noteMap[platform]?'<div class="desc" style="padding:12px 16px 0;background:#fff">'+noteMap[platform]+'</div>':'';
+  // Any commentary about a platform's campaign structure has to come from the payload
+  // (meta.platforms.<p>.notes), never from a hardcoded assumption about the account.
+  var note=adsNotesHTML(platform);
   if(!rows.length)return '<div class="ads-band">Campaign breakdown</div><div class="empty" style="background:#fff;border:1px solid var(--aline);border-top:0">No campaigns in the selected date range.</div>';
   var sk=adsState.sortK||"sp",sd=adsState.sortD||-1;
+  // Purchases/revenue are null when the platform doesn't report them, so every derived
+  // ratio has to check for null explicitly — `null/spend` would silently render 0.00×.
   var derive=function(c){return {g:c.g||null,n:c.n,s:c.s,e:c.e,sp:c.sp,im:c.im,cl:c.cl,pu:c.pu,rv:c.rv,
-    ctr:c.im?c.cl/c.im:null,cpc:c.cl?c.sp/c.cl:null,cpp:c.pu?c.sp/c.pu:null,roas:c.sp?c.rv/c.sp:null};};
+    ctr:c.im?c.cl/c.im:null,cpc:c.cl?c.sp/c.cl:null,
+    cpp:(c.pu&&c.sp!=null)?c.sp/c.pu:null,
+    roas:(c.sp&&c.rv!=null)?c.rv/c.sp:null};};
   rows=rows.map(derive);
   rows.sort(function(a,b){
     if(sk==="g")return ((a.g?1:0)-(b.g?1:0))*sd;
@@ -3199,7 +3277,9 @@ function campaignSection(platform,region){
     return (av-bv)*sd;
   });
   function d2(iso){if(!iso)return "";var d=_pdate(iso);return d.getDate()+" "+MONTHS_FULL[d.getMonth()];}
-  var tSp=0,tIm=0,tCl=0,tPu=0,tRv=0;rows.forEach(function(c){tSp+=c.sp;tIm+=c.im;tCl+=c.cl;tPu+=c.pu;tRv+=c.rv;});
+  var _T={sp:null,im:null,cl:null,pu:null,rv:null};
+  rows.forEach(function(c){["sp","im","cl","pu","rv"].forEach(function(k){if(c[k]!=null)_T[k]=(_T[k]||0)+c[k];});});
+  var tSp=_T.sp,tIm=_T.im,tCl=_T.cl,tPu=_T.pu,tRv=_T.rv;
   var roasVals=rows.map(function(c){return c.roas;}).filter(function(v){return v!=null&&isFinite(v);});
   var rMin=roasVals.length?Math.min.apply(null,roasVals):null,rMax=roasVals.length?Math.max.apply(null,roasVals):null;
   var best=null,worst=null;
@@ -3214,19 +3294,19 @@ function campaignSection(platform,region){
       +gcell
       +'<td style="text-align:left;white-space:normal;min-width:240px;font-weight:600">'+_fullify(c.n)+'</td>'
       +'<td style="white-space:nowrap">'+d2(c.s)+(c.e&&c.e!==c.s?(' \u2013 '+d2(c.e)):'')+'</td>'
-      +'<td>'+money(c.sp)+'</td>'
-      +'<td>'+int(c.im)+'</td>'
-      +'<td>'+int(c.cl)+'</td>'
+      +'<td>'+_m0(c.sp)+'</td>'
+      +'<td>'+_i0(c.im)+'</td>'
+      +'<td>'+_i0(c.cl)+'</td>'
       +'<td>'+(c.ctr!=null?(c.ctr*100).toFixed(1)+"%":"\u2013")+'</td>'
       +'<td>'+(c.cpc!=null?moneyP(c.cpc):"\u2013")+'</td>'
-      +'<td>'+int(c.pu)+'</td>'
+      +'<td>'+_i0(c.pu)+'</td>'
       +'<td>'+(c.cpp!=null?moneyP(c.cpp):"\u2013")+'</td>'
-      +'<td>'+money(c.rv)+'</td>'
+      +'<td>'+_m0(c.rv)+'</td>'
       +'<td style="font-weight:700'+(hc?';background:'+hc:'')+'">'+(c.roas!=null?c.roas.toFixed(2)+"\u00d7":"\u2013")+'</td>'
       +'</tr>';
   }).join("");
-  var tctr=tIm?tCl/tIm:null,tcpc=tCl?tSp/tCl:null,tcpp=tPu?tSp/tPu:null,troas=tSp?tRv/tSp:null;
-  var totRow='<tr><td class="ta"></td><td class="ta" style="text-align:left">Total \u00b7 '+rows.length+' campaigns</td><td class="ta"></td><td class="ta">'+money(tSp)+'</td><td class="ta">'+int(tIm)+'</td><td class="ta">'+int(tCl)+'</td><td class="ta">'+(tctr!=null?(tctr*100).toFixed(1)+"%":"\u2013")+'</td><td class="ta">'+(tcpc!=null?moneyP(tcpc):"\u2013")+'</td><td class="ta">'+int(tPu)+'</td><td class="ta">'+(tcpp!=null?moneyP(tcpp):"\u2013")+'</td><td class="ta">'+money(tRv)+'</td><td class="ta">'+(troas!=null?troas.toFixed(2)+"\u00d7":"\u2013")+'</td></tr>';
+  var tctr=tIm?tCl/tIm:null,tcpc=tCl?tSp/tCl:null,tcpp=(tPu&&tSp!=null)?tSp/tPu:null,troas=(tSp&&tRv!=null)?tRv/tSp:null;
+  var totRow='<tr><td class="ta"></td><td class="ta" style="text-align:left">Total \u00b7 '+rows.length+' campaigns</td><td class="ta"></td><td class="ta">'+_m0(tSp)+'</td><td class="ta">'+_i0(tIm)+'</td><td class="ta">'+_i0(tCl)+'</td><td class="ta">'+(tctr!=null?(tctr*100).toFixed(1)+"%":"\u2013")+'</td><td class="ta">'+(tcpc!=null?moneyP(tcpc):"\u2013")+'</td><td class="ta">'+_i0(tPu)+'</td><td class="ta">'+(tcpp!=null?moneyP(tcpp):"\u2013")+'</td><td class="ta">'+_m0(tRv)+'</td><td class="ta">'+(troas!=null?troas.toFixed(2)+"\u00d7":"\u2013")+'</td></tr>';
   var cols=[["g","Creative"],["n","Campaign"],["s","Period"],["sp","Spend"],["im","Impr."],["cl","Clicks"],["ctr","CTR"],["cpc","CPC"],["pu","Purch."],["cpp","Cost/Purch"],["rv","Revenue"],["roas","ROAS"]];
   var head='<thead><tr>'+cols.map(function(c,i){
     var on=(sk===c[0]);
@@ -3235,8 +3315,8 @@ function campaignSection(platform,region){
   var bw='';
   if(best&&worst&&best!==worst){
     bw='<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:12px;padding:14px 16px 2px;background:#fff">'
-      +'<div style="border:1px solid var(--aline);border-left:4px solid #63BE7B;border-radius:10px;padding:11px 13px"><div style="font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Best ROAS</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px;line-height:1.35">'+best.n+'</div><div style="font-size:12px;color:var(--muted)">'+best.roas.toFixed(2)+'\u00d7 \u00b7 '+money(best.sp)+' spend \u2192 '+money(best.rv)+'</div></div>'
-      +'<div style="border:1px solid var(--aline);border-left:4px solid #F8696B;border-radius:10px;padding:11px 13px"><div style="font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Worst ROAS</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px;line-height:1.35">'+worst.n+'</div><div style="font-size:12px;color:var(--muted)">'+worst.roas.toFixed(2)+'\u00d7 \u00b7 '+money(worst.sp)+' spend \u2192 '+money(worst.rv)+'</div></div>'
+      +'<div style="border:1px solid var(--aline);border-left:4px solid #63BE7B;border-radius:10px;padding:11px 13px"><div style="font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Best ROAS</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px;line-height:1.35">'+best.n+'</div><div style="font-size:12px;color:var(--muted)">'+best.roas.toFixed(2)+'\u00d7 \u00b7 '+_m0(best.sp)+' spend \u2192 '+_m0(best.rv)+'</div></div>'
+      +'<div style="border:1px solid var(--aline);border-left:4px solid #F8696B;border-radius:10px;padding:11px 13px"><div style="font-size:9.5px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;color:var(--muted)">Worst ROAS</div><div style="font-size:12.5px;font-weight:600;margin:4px 0 2px;line-height:1.35">'+worst.n+'</div><div style="font-size:12px;color:var(--muted)">'+worst.roas.toFixed(2)+'\u00d7 \u00b7 '+_m0(worst.sp)+' spend \u2192 '+_m0(worst.rv)+'</div></div>'
       +'</div>';
   }
   var nG=rows.filter(function(c){return !!c.g;}).length;
@@ -3250,8 +3330,9 @@ function platformCard(title,platform,region,gran){
   var hasAny=pf&&(gran==='week'?(pf.weekly&&pf.weekly.length):(pf.months&&pf.months.length));
   var s0=P.length?(gran==='week'?P[0].range.split(' \u2013 ')[0]:monthFull(P[0].label)):'';
   var s1=P.length?(gran==='week'?P[P.length-1].range.split(' \u2013 ')[1]:monthFull(P[P.length-1].label)):'';
-  var yrsfx=(gran==='week')?'':' 2026';
-  var titleTxt=region+' '+title.toUpperCase()+' 2026 RESULTS';
+  var YR=adsYearOf(pf);
+  var yrsfx=(gran==='week')?'':' '+YR;
+  var titleTxt=adsBrandLabel(region).toUpperCase()+' · '+title.toUpperCase()+' '+YR+' RESULTS';
   var band=(gran==='week')?'WEEKLY CAMPAIGN':'MONTHLY CAMPAIGN';
   var emptyMsg=hasAny?'No data in the selected date range.':'No '+(gran==='week'?'weekly':'monthly')+' data for this platform yet.';
   var mode=adsState.mode||"dashboard";
@@ -3259,7 +3340,9 @@ function platformCard(title,platform,region,gran){
   if(mode==="campaigns"){
     inner=campaignSection(platform,region);
   }else{
-    inner=hasData?('<div class="ads-band">'+band+'</div>'+buildAdsTable(platform,pf,gran)):'<div class="empty" style="background:#fff;border:1px solid var(--aline);border-top:0">'+emptyMsg+'</div>';
+    // The platform's own caveats (how revenue was derived, metrics it couldn't serve)
+    // belong on the view that shows those numbers, not only on the campaign table.
+    inner=hasData?('<div class="ads-band">'+band+'</div>'+adsNotesHTML(platform)+buildAdsTable(platform,pf,gran)):(adsNotesHTML(platform)+'<div class="empty" style="background:#fff;border:1px solid var(--aline);border-top:0">'+emptyMsg+'</div>');
   }
   var foot='';
   if(mode!=="campaigns"&&pf){
@@ -3269,6 +3352,9 @@ function platformCard(title,platform,region,gran){
       var _sp=0;(pf.spend||[]).forEach(function(v){if(v!=null)_sp+=v;});
       if(_rm==null&&_yb!=null)_rm=_yb-_sp;
       if(_uy==null&&_yb)_uy=_sp/_yb;
+      // No budget anywhere in the payload -> no budget box at all. Three dashes in a
+      // labelled panel reads as "we lost the number"; nothing reads as "not reported".
+      if(_yb!=null)
       foot='<div class="ads-ybox">'
         +'<div class="r"><span class="k">Yearly Budget</span><span class="v">'+(_yb!=null?money(_yb):'\u2013')+'</span></div>'
         +'<div class="r"><span class="k">Remaining</span><span class="v">'+(_rm!=null?moneyP(_rm):'\u2013')+'</span></div>'
@@ -3285,14 +3371,32 @@ function renderAds(){
   var host=document.getElementById("adsTab");
   var region=adsRegionFor(state.brand);
   if(!region){
-    host.innerHTML='<section class="panel"><div class="empty" style="padding:48px 24px;line-height:1.7"><div style="font-family:Fraunces,serif;font-size:21px;color:var(--ink);margin-bottom:10px">No advertising data connected</div><div>Facebook, Google, TikTok &amp; Dotdigital figures aren’t wired to a live source yet, so nothing is shown here — this dashboard never displays numbers it can’t back with data. Connect an ads data source to light this tab up.</div></div></section>';
+    var _ai=(LIVE[state.brand]||{}),_am=(ADS_META[state.brand]||{});
+    var _why='';
+    if(_ai.adsLoading){
+      _why='<div>Loading Facebook, Google and TikTok…</div>';
+    }else{
+      // Say exactly which platform reported what, so "nothing here" is diagnosable
+      // rather than mysterious.
+      var _lines=[["fb","Facebook"],["google","Google"],["tiktok","TikTok"]].map(function(p){
+        var s=_am[p[0]];
+        if(!s)return null;
+        if(s.ok)return p[1]+': connected, no spend in this window';
+        return p[1]+': '+(s.reason==="not-configured"?"no credentials set":s.reason);
+      }).filter(Boolean);
+      _why=_lines.length
+        ? '<div style="margin-top:10px;font-size:12.5px">'+_lines.join('<br>')+'</div>'
+        : '';
+    }
+    host.innerHTML='<section class="panel"><div class="empty" style="padding:48px 24px;line-height:1.7"><div style="font-family:Fraunces,serif;font-size:21px;color:var(--ink);margin-bottom:10px">No advertising data for '+B().name+'</div><div>Facebook, Google and TikTok figures come straight from each platform’s API — nothing is shown until one of them answers, because this dashboard never displays numbers it can’t back with data.</div>'+_why+'</div></section>';
     return;
   }
   var gran=adsState.gran;
+  var _dv=function(v){return v||'';};
   var dateFilter='<div class="ads-filter"><span class="afl">Range</span>'
-    +'<input type="date" id="adsStart" value="'+adsState.start+'" min="'+ADS_MINDATE+'" max="'+ADS_MAXDATE+'">'
+    +'<input type="date" id="adsStart" value="'+_dv(adsState.start)+'" min="'+_dv(ADS_MINDATE)+'" max="'+_dv(ADS_MAXDATE)+'">'
     +'<span class="afl" style="letter-spacing:0">to</span>'
-    +'<input type="date" id="adsEnd" value="'+adsState.end+'" min="'+ADS_MINDATE+'" max="'+ADS_MAXDATE+'">'
+    +'<input type="date" id="adsEnd" value="'+_dv(adsState.end)+'" min="'+_dv(ADS_MINDATE)+'" max="'+_dv(ADS_MAXDATE)+'">'
     +'<button class="afreset" id="adsReset">Reset</button></div>';
   var view=adsState.view||"overview";
   var mode=adsState.mode||"dashboard";
@@ -3307,8 +3411,12 @@ function renderAds(){
       ?(titleMap[view]+' \u2014 every campaign in the range, sortable by any column.')
       :(titleMap[view]+' \u2014 '+(gran==='week'?'weekly (Mon\u2013Sun) roll-up. Budget &amp; utilisation are monthly-only.':'monthly campaign results.'));
   }else{
-    subDesc='Facebook, Google, TikTok &amp; Dotdigital. Filter by month and channel below; tap a platform for the full breakdown.';
+    subDesc='Facebook, Google and TikTok, live from each platform’s API. Filter by month and channel below; tap a platform for the full breakdown.';
   }
+  // The ad accounts report in their own currency while this tab formats with the store's
+  // symbol — a mismatch has to be stated, not quietly converted.
+  var _cw=adsCurrencyWarning();
+  if(_cw)subDesc+=' <b style="color:var(--accent)">'+_cw+'</b>';
   var granSeg,ctrlHTML,filterNote;
   if(!isDetail){
     ctrlHTML=''; filterNote='';
@@ -3320,7 +3428,7 @@ function renderAds(){
     granSeg='<div class="seg" id="adsGran"><button data-g="month" class="'+(gran==='month'?'on':'')+'">Monthly</button><button data-g="week" class="'+(gran==='week'?'on':'')+'">Weekly</button></div>';
     ctrlHTML=dateFilter+granSeg; filterNote=' Filter by date range below.';
   }
-  var h='<div class="panel-head" style="margin:4px 0 14px"><div><span class="eyebrow" style="display:block;margin-bottom:5px">Advertising · iORA '+region+'</span><h2 class="adhead">Ad <em>Performance</em></h2><div class="desc">'+subDesc+filterNote+'</div></div><div class="controls" style="flex-direction:column;align-items:flex-end;gap:9px">'+ctrlHTML+'</div></div>';
+  var h='<div class="panel-head" style="margin:4px 0 14px"><div><span class="eyebrow" style="display:block;margin-bottom:5px">Advertising · '+adsBrandLabel(region)+'</span><h2 class="adhead">Ad <em>Performance</em></h2><div class="desc">'+subDesc+filterNote+'</div></div><div class="controls" style="flex-direction:column;align-items:flex-end;gap:9px">'+ctrlHTML+'</div></div>';
   if(isDetail){
     h+='<div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:14px">'
       +'<button class="afreset" id="adsBack">\u2190 All platforms</button>'
@@ -3342,7 +3450,12 @@ function renderAds(){
   }
   host.innerHTML=h;
   host.querySelectorAll("#adsGran button").forEach(function(b){b.onclick=function(){adsState.gran=b.dataset.g;renderAds();};});
-  host.querySelectorAll("#ovYear button").forEach(function(b){b.onclick=function(){adsState.ovYear=+b.dataset.y;adsState.ovMonth="all";renderAds();};});
+  // Ads are fetched one calendar year at a time, so picking a year loads it.
+  host.querySelectorAll("#ovYear button").forEach(function(b){b.onclick=function(){
+    adsState.ovYear=+b.dataset.y;adsState.ovMonth="all";
+    if(typeof loadAdsYear==="function")loadAdsYear(state.brand,adsState.ovYear);
+    renderAds();
+  };});
   host.querySelectorAll("#ovMonth button").forEach(function(b){b.onclick=function(){adsState.ovMonth=b.dataset.m;renderAds();};});
   host.querySelectorAll("#ovChan button").forEach(function(b){b.onclick=function(){adsState.ovChan=b.dataset.c;renderAds();};});
   host.querySelectorAll("#adsMode button").forEach(function(b){b.onclick=function(){adsState.mode=b.dataset.m;renderAds();};});
@@ -3355,7 +3468,7 @@ function renderAds(){
   var si=document.getElementById("adsStart"),ei=document.getElementById("adsEnd"),rs=document.getElementById("adsReset");
   if(si)si.onchange=function(){adsState.start=si.value||null;renderAds();};
   if(ei)ei.onchange=function(){adsState.end=ei.value||null;renderAds();};
-  if(rs)rs.onclick=function(){adsState.start="2026-01-01";adsState.end="2026-06-30";renderAds();};
+  if(rs)rs.onclick=function(){adsState.start=ADS_MINDATE;adsState.end=ADS_MAXDATE;renderAds();};
   host.querySelectorAll(".ads-ov-card").forEach(function(c){c.onclick=function(){adsState.view=c.dataset.plat;adsState.mode="dashboard";adsState.sortK="sp";adsState.sortD=-1;renderAds();};});
   var bk=document.getElementById("adsBack");if(bk)bk.onclick=function(){adsState.view="overview";adsState.mode="dashboard";renderAds();};
 }
@@ -3513,6 +3626,8 @@ function rebuildAggs() {
       BRANDS[agg].vou[y] = a;
     });
   });
+  // Channel Mix's Website column IS the Shopify revenue series, so it has to follow it.
+  if (typeof rebuildChannelMix === "function") rebuildChannelMix();
 }
 
 // Metrics tied to the live window, all supplied by /api/dashboard. `rev`/`dis`/`ord`
@@ -3631,6 +3746,7 @@ function markComingSoonPanels(isLiveOk) {
   // from /api/insights (phase 3) except fulfillment/saleMix, which ride on the full
   // /api/dashboard orders pull (phase 2); both merge into LIVE_EXTRAS.
   var HAS = {
+    chanPanel: "channelMix",
     tgtPanel: "targets",
     discPanel: "discounts",
     catPanel: "categories",
@@ -3649,6 +3765,9 @@ function markComingSoonPanels(isLiveOk) {
     if (!p || p.style.display === "none") return;
     var have = HAS[id] && extras[HAS[id]];
     if (id === "sessPanel") have = !!(extras.traffic && extras.traffic.byYear);
+    // Channel Mix is live for roll-ups too (summed from members), and LIVE_EXTRAS is
+    // only keyed by store — so read the mix itself.
+    if (id === "chanPanel") have = !!CHANNELMIX[state.brand];
     if (have) return;
     var tag = document.createElement("div");
     tag.className = "cs-badge";
@@ -3753,12 +3872,22 @@ function ensureHistory(brand) {
 // For a roll-up: just load each member's history — the aggregate is computed from
 // members' full history, so it doesn't need per-member windows.
 function ensureLive(brand) {
-  if (AGG_MEMBERS[brand]) { AGG_MEMBERS[brand].forEach(ensureHistory); return; }
+  if (AGG_MEMBERS[brand]) {
+    AGG_MEMBERS[brand].forEach(function (k) {
+      ensureHistory(k);
+      // Channel Mix for a roll-up is summed from its members, so each member's
+      // marketplace pull is needed. Unconfigured stores answer instantly; configured
+      // ones are edge-cached for 10 minutes, so re-selecting a roll-up is cheap.
+      loadMarketplace(k, curStart, curEnd);
+    });
+    return;
+  }
   if (!isLiveBrand(brand)) return;
   ensureHistory(brand);
   var info = liveInfo(brand);
   var key = curStart + "|" + curEnd;
   if (info.winRange !== key && !info.winLoading) loadWindow(brand, curStart, curEnd);
+  loadMarketplace(brand, curStart, curEnd);
 }
 
 // Keep retrying a failed history load, indefinitely, with a capped exponential
@@ -4115,6 +4244,312 @@ function applyExtras(brand, sections, range) {
   if (range) LIVE_EXTRAS[brand]._range = range;
 }
 
+/* ====================================================================
+   ADS  (phases 1–3: Meta Marketing API, Google Ads API, TikTok Business API)
+   One /api/ads call per brand per calendar year fills ADS[platform][brand] and
+   CAMPAIGNS[platform][brand]. Roll-up brands (SGALL/MYALL/GROUP) are summed from
+   their members client-side, exactly like the sales metrics — with FX applied to
+   money for GROUP, and with any metric a member could NOT report forcing the
+   aggregate to null rather than a total that quietly omits that member.
+   ==================================================================== */
+var LIVE_ADS = {}; // brand -> last /api/ads payload
+
+// Sum member series into one. `parts` = [{pf, fx, label}].
+function sumAdsSeries(parts) {
+  parts = parts.filter(function (p) { return p && p.pf; });
+  if (!parts.length) return null;
+  var idx = [];
+  parts.forEach(function (p) {
+    (p.pf.monthIndexes || []).forEach(function (mi) { if (idx.indexOf(mi) < 0) idx.push(mi); });
+  });
+  idx.sort(function (a, b) { return a - b; });
+  if (!idx.length) return null;
+  // A metric only one member reports cannot be totalled honestly.
+  var allPurch = parts.every(function (p) { return !!p.pf.purch; });
+  var allRev = parts.every(function (p) { return !!p.pf.rev; });
+  var out = {
+    months: idx.map(function (i) { return MONTHS[i]; }),
+    monthIndexes: idx,
+    year: parts[0].pf.year,
+    currency: null,
+    spend: [], impr: [], clicks: [],
+    purch: allPurch ? [] : null,
+    rev: allRev ? [] : null,
+    budget: null,
+    weekly: [],
+    yearlyBudget: null, remaining: null, utilYear: null,
+  };
+  idx.forEach(function (mi, col) {
+    var acc = { spend: null, impr: null, clicks: null, purch: null, rev: null };
+    parts.forEach(function (p) {
+      var at = (p.pf.monthIndexes || []).indexOf(mi);
+      if (at < 0) return;
+      var fx = p.fx || 1;
+      [["spend", fx], ["impr", 1], ["clicks", 1], ["purch", 1], ["rev", fx]].forEach(function (f) {
+        var arr = p.pf[f[0]];
+        if (!arr || arr[at] == null) return;
+        acc[f[0]] = (acc[f[0]] || 0) + arr[at] * f[1];
+      });
+    });
+    out.spend[col] = acc.spend;
+    out.impr[col] = acc.impr;
+    out.clicks[col] = acc.clicks;
+    if (out.purch) out.purch[col] = acc.purch;
+    if (out.rev) out.rev[col] = acc.rev;
+  });
+  // Weekly buckets keyed by their Monday.
+  var wk = {};
+  parts.forEach(function (p) {
+    var fx = p.fx || 1;
+    (p.pf.weekly || []).forEach(function (w) {
+      var t = wk[w.w] || (wk[w.w] = { w: w.w, spend: null, impr: null, clicks: null, purch: null, rev: null });
+      [["spend", fx], ["impr", 1], ["clicks", 1], ["purch", 1], ["rev", fx]].forEach(function (f) {
+        if (w[f[0]] == null) return;
+        t[f[0]] = (t[f[0]] || 0) + w[f[0]] * f[1];
+      });
+    });
+  });
+  out.weekly = Object.keys(wk).sort().map(function (k) {
+    var w = wk[k];
+    if (!allPurch) w.purch = null;
+    if (!allRev) w.rev = null;
+    return w;
+  });
+  return out;
+}
+
+// Member campaign rows, labelled with their brand so a roll-up row is attributable.
+function mergeAdsCampaigns(parts) {
+  var out = [];
+  parts.forEach(function (p) {
+    var fx = p.fx || 1;
+    (p.rows || []).forEach(function (c) {
+      out.push({
+        n: c.n + " · " + p.label,
+        s: c.s, e: c.e, g: c.g || null,
+        sp: c.sp == null ? null : c.sp * fx,
+        im: c.im, cl: c.cl, pu: c.pu,
+        rv: c.rv == null ? null : c.rv * fx,
+      });
+    });
+  });
+  return out.sort(function (a, b) { return (b.sp || 0) - (a.sp || 0); });
+}
+
+// Rebuild the roll-up brands' ads series from whichever members have loaded.
+function rebuildAdsAggs() {
+  Object.keys(AGG_MEMBERS).forEach(function (agg) {
+    var isGroup = agg === "GROUP";
+    ["fb", "google", "tiktok"].forEach(function (plat) {
+      var parts = [], camps = [];
+      AGG_MEMBERS[agg].forEach(function (k) {
+        var pf = ADS[plat][k];
+        if (!pf) return;
+        var fx = (isGroup && /MY$/.test(k)) ? FX_MYR_SGD : 1;
+        parts.push({ pf: pf, fx: fx, label: BRANDS[k].name });
+        camps.push({ rows: CAMPAIGNS[plat][k] || [], fx: fx, label: BRANDS[k].name });
+      });
+      var summed = sumAdsSeries(parts);
+      if (summed) {
+        ADS[plat][agg] = summed;
+        CAMPAIGNS[plat][agg] = mergeAdsCampaigns(camps);
+      } else {
+        delete ADS[plat][agg];
+        delete CAMPAIGNS[plat][agg];
+      }
+    });
+    var any = ["fb", "google", "tiktok"].some(function (p) { return !!ADS[p][agg]; });
+    if (any) _AR[agg] = agg; else delete _AR[agg];
+    // A roll-up's currency note is whatever its members reported.
+    ADS_META[agg] = { _storeCurrency: (BRANDS[agg] && BRANDS[agg].cur && BRANDS[agg].cur.code) || null };
+    AGG_MEMBERS[agg].forEach(function (k) {
+      var m = ADS_META[k];
+      if (!m) return;
+      ["fb", "google", "tiktok"].forEach(function (p) {
+        if (m[p] && m[p].ok && !ADS_META[agg][p]) ADS_META[agg][p] = m[p];
+      });
+    });
+  });
+}
+
+function applyAdsPayload(brand, payload) {
+  var plats = (payload && payload.platforms) || {};
+  var camps = (payload && payload.campaigns) || {};
+  var meta = (payload && payload.meta) || {};
+  LIVE_ADS[brand] = payload;
+  ADS_META[brand] = Object.assign({ _storeCurrency: meta.storeCurrency || null }, meta.platforms || {});
+  var any = false;
+  ["fb", "google", "tiktok"].forEach(function (p) {
+    if (plats[p]) { ADS[p][brand] = plats[p]; any = true; } else { delete ADS[p][brand]; }
+    if (camps[p]) CAMPAIGNS[p][brand] = camps[p]; else delete CAMPAIGNS[p][brand];
+  });
+  // Only claim the tab for this brand when a platform actually returned a series.
+  if (any) _AR[brand] = brand; else delete _AR[brand];
+  // Optional, hand-configured performance targets (server-side env) — absent by default.
+  if (meta.targets) {
+    if (meta.targets.roas != null) ADS_TARGETS.roas = meta.targets.roas;
+    if (meta.targets.ctr != null) ADS_TARGETS.ctr = meta.targets.ctr;
+  }
+  // The date pickers must offer exactly the window that was pulled.
+  if (meta.range && meta.range.start && meta.range.end) {
+    ADS_MINDATE = meta.range.start;
+    ADS_MAXDATE = meta.range.end;
+    if (!adsState.start || adsState.start < ADS_MINDATE || adsState.start > ADS_MAXDATE) adsState.start = ADS_MINDATE;
+    if (!adsState.end || adsState.end > ADS_MAXDATE || adsState.end < ADS_MINDATE) adsState.end = ADS_MAXDATE;
+  }
+  rebuildAdsAggs();
+  return any;
+}
+
+// Load one calendar year of ads for one store. Cheap and idempotent: a year already
+// loaded (or in flight) is skipped.
+function loadAdsYear(brand, year) {
+  if (AGG_MEMBERS[brand]) {
+    AGG_MEMBERS[brand].forEach(function (k) { loadAdsYear(k, year); });
+    return;
+  }
+  if (!isLiveBrand(brand)) return;
+  var info = liveInfo(brand);
+  if (info.adsLoading) return;
+  if (info.adsYear === year && info.adsSettled) return;
+  // A failed load is retried when the tab is next opened, but not immediately: renderAds
+  // itself asks for the data, so an un-cooled retry would spin.
+  if (info.adsYear === year && info.adsFailAt && Date.now() - info.adsFailAt < 30000) return;
+  var end = year === (new Date()).getFullYear() ? TODAY_STR : year + "-12-31";
+  info.adsLoading = true;
+  info.adsYear = year;
+  if (topTabState === "ads") renderAds();
+  fetchJSON("/api/ads?brand=" + brand + "&start=" + year + "-01-01&end=" + encodeURIComponent(end), 2)
+    .then(function (payload) {
+      info.adsLoading = false;
+      info.adsSettled = true;
+      applyAdsPayload(brand, payload);
+      if (topTabState === "ads") renderAds();
+      markComingSoonPanels(!!info.ok);
+    })
+    .catch(function () {
+      // A failed ads load leaves the tab in its honest empty state; it retries the next
+      // time the tab (or that year) is opened, after the cooldown above.
+      info.adsLoading = false;
+      info.adsSettled = false;
+      info.adsFailAt = Date.now();
+      if (topTabState === "ads") renderAds();
+    });
+}
+function ensureAds(brand) {
+  loadAdsYear(brand, adsState.ovYear || ADS_THIS_YEAR);
+}
+
+/* ====================================================================
+   MARKETPLACES  (phase 6: Shopee + Lazada Open Platforms)
+   /api/marketplace supplies the two things Shopify cannot: the marketplace half
+   of Channel Mix, and marketplace voucher rows for the voucher report. The
+   Website column of Channel Mix is the store's own Shopify revenue series, so the
+   mix is rebuilt whenever either side changes.
+   ==================================================================== */
+var LIVE_MKT = {}; // brand -> { channels, vouchers, meta }
+
+function rebuildChannelMix() {
+  // Individual stores first: Website (Shopify) + each marketplace that answered.
+  LIVE_BRANDS.forEach(function (b) {
+    var pay = LIVE_MKT[b];
+    if (!pay || !pay.channels) { delete CHANNELMIX[b]; delete CHAN_COV[b]; return; }
+    var years = {}, cov = {};
+    ["Shopee", "Lazada"].forEach(function (ch) {
+      var rev = pay.channels[ch] && pay.channels[ch].revenue;
+      if (!rev) return;
+      Object.keys(rev).forEach(function (y) {
+        var arr = rev[y];
+        if (!arr || !arr.some(function (v) { return v != null; })) return;
+        (years[y] = years[y] || {})[ch] = arr.slice();
+        var c = cov[y] = cov[y] || [];
+        arr.forEach(function (v, i) { if (v != null && c.indexOf(i) < 0) c.push(i); });
+      });
+    });
+    var yrs = Object.keys(years);
+    if (!yrs.length) { delete CHANNELMIX[b]; delete CHAN_COV[b]; return; }
+    yrs.forEach(function (y) {
+      // Website = the Shopify series already on screen for that year (null months stay
+      // null: a month Shopify hasn't loaded is not a zero-revenue website month).
+      var web = (BRANDS[b].rev || {})[y];
+      if (web && web.some(function (v) { return v != null; })) years[y].Website = web.slice();
+      cov[y].sort(function (a, b2) { return a - b2; });
+    });
+    CHANNELMIX[b] = years;
+    CHAN_COV[b] = cov;
+  });
+
+  // Roll-ups: sum members that have a mix, applying FX for the cross-currency Group.
+  Object.keys(AGG_MEMBERS).forEach(function (agg) {
+    var out = {}, cov = {};
+    AGG_MEMBERS[agg].forEach(function (k) {
+      var cm = CHANNELMIX[k];
+      if (!cm) return;
+      var fx = (agg === "GROUP" && /MY$/.test(k)) ? FX_MYR_SGD : 1;
+      Object.keys(cm).forEach(function (y) {
+        Object.keys(cm[y]).forEach(function (ch) {
+          var src = cm[y][ch];
+          var dst = (out[y] = out[y] || {});
+          var arr = dst[ch] || (dst[ch] = Array(12).fill(null));
+          src.forEach(function (v, i) { if (v != null) arr[i] = (arr[i] || 0) + v * fx; });
+        });
+        ((CHAN_COV[k] || {})[y] || []).forEach(function (i) {
+          var c = cov[y] = cov[y] || [];
+          if (c.indexOf(i) < 0) c.push(i);
+        });
+      });
+    });
+    if (Object.keys(out).length) {
+      Object.keys(cov).forEach(function (y) { cov[y].sort(function (a, b) { return a - b; }); });
+      CHANNELMIX[agg] = out;
+      CHAN_COV[agg] = cov;
+    } else {
+      delete CHANNELMIX[agg];
+      delete CHAN_COV[agg];
+    }
+  });
+}
+
+function applyMarketplacePayload(brand, payload) {
+  LIVE_MKT[brand] = payload || null;
+  var live = !!(payload && payload.meta && payload.meta.live);
+  // Marketplace voucher rows ride in LIVE_EXTRAS beside the website voucher report;
+  // getVoucherUnit() concatenates the two, so the deck's channel filter works.
+  var fold = {};
+  if (live && payload.vouchers && payload.vouchers.length) fold.marketplaceVouchers = payload.vouchers;
+  if (live) fold.channelMix = true;
+  // Label the deck's reporting period even when only the marketplace half loaded.
+  if (live && payload.meta.range && !(LIVE_EXTRAS[brand] || {})._range) fold._range = payload.meta.range;
+  if (Object.keys(fold).length) LIVE_EXTRAS[brand] = Object.assign(LIVE_EXTRAS[brand] || {}, fold);
+  rebuildChannelMix();
+  return live;
+}
+
+function loadMarketplace(brand, start, end) {
+  if (!isLiveBrand(brand)) return;
+  var info = liveInfo(brand);
+  var key = start + "|" + end;
+  if (info.mktLoading || info.mktRange === key) return;
+  info.mktLoading = true;
+  var qs = "brand=" + brand + "&start=" + encodeURIComponent(start) + "&end=" + encodeURIComponent(end);
+  fetchJSON("/api/marketplace?" + qs, 2)
+    .then(function (payload) {
+      info.mktLoading = false;
+      info.mktRange = key;
+      applyMarketplacePayload(brand, payload);
+      if (brand === state.brand) {
+        reRender();
+        markComingSoonPanels(!!info.ok);
+        if (topTabState === "vouchers") renderVoucherTab();
+      }
+    })
+    .catch(function () {
+      // Leave mktRange unset so selecting the brand again retries.
+      info.mktLoading = false;
+      if (brand === state.brand) reRender();
+    });
+}
+
 // Re-check the "Coming soon" badges every time the visible panel set changes.
 (function () {
   var _applyPanels = applyPanels;
@@ -4122,6 +4557,17 @@ function applyExtras(brand, sections, range) {
     _applyPanels();
     var i = LIVE[state.brand];
     markComingSoonPanels(!!(i && i.ok));
+  };
+})();
+
+// The Ads tab is lazy: no ad-platform call is made until someone actually looks at it,
+// and every entry point into the tab goes through renderAds — including a brand switch
+// while it is open — so that is where the fetch is triggered.
+(function () {
+  var _renderAds = renderAds;
+  renderAds = function () {
+    ensureAds(state.brand);
+    return _renderAds.apply(this, arguments);
   };
 })();
 
