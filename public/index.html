@@ -225,14 +225,10 @@
   #brandTrigger .bd-logo{max-width:66px;max-height:16px}
   .bd-mono{width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:800;color:#fff;letter-spacing:.3px;flex:0 0 auto}
   #brandTrigger .bd-logo,#brandTrigger .bd-mono{margin-right:2px}
-  /* ---- Live data layer: coming-soon badges, status + connection indicator ---- */
+  /* ---- Live data layer: coming-soon badges + connection indicator ---- */
   .panel{position:relative}
   .cs-badge{position:absolute;top:12px;right:14px;z-index:5;font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:600;color:var(--muted);background:var(--paper2);border:1px solid var(--line);border-radius:999px;padding:3px 9px}
-  .bd-opt.cs-soon::after{content:"soon";font-size:8px;letter-spacing:.05em;text-transform:uppercase;margin-left:5px;opacity:.6;vertical-align:super}
   #tabBarStatus{display:flex;flex-direction:column;align-items:flex-end;gap:2px;min-width:0}
-  #liveStatus{font-size:11px;color:var(--muted)}
-  #liveStatus.ok{color:var(--green)}
-  #liveStatus.warn{color:var(--accent)}
   /* Connection chip: one dot element that spins amber while connecting (and while
      retrying after a failure) and goes solid green once live data lands. */
   .conn{display:inline-flex;align-items:center;gap:7px;font-size:11px;color:var(--muted);--conn-amber:#C87A2B}
@@ -244,8 +240,6 @@
   .conn.connected .conn-dot{background:var(--green);animation:connGlow 1.8s ease-out infinite}
   @keyframes connGlow{0%{box-shadow:0 0 0 0 rgba(31,122,61,.5)}70%{box-shadow:0 0 0 7px rgba(31,122,61,0)}100%{box-shadow:0 0 0 0 rgba(31,122,61,0)}}
   .conn.connected .conn-label{color:var(--green);font-weight:600}
-  .conn.unconfigured .conn-dot{background:var(--muted)}
-  .conn.unconfigured .conn-label{color:var(--muted)}
   @media (prefers-reduced-motion:reduce){.conn.connecting .conn-dot{animation-duration:2s}.conn.connected .conn-dot{animation:none}}
   .kpi .sk-line{display:inline-block;width:74px;height:13px;border-radius:7px;vertical-align:middle;background:linear-gradient(100deg,var(--paper2) 30%,var(--line) 50%,var(--paper2) 70%);background-size:220% 100%;animation:shimmer 1.5s ease-in-out infinite}
 </style>
@@ -3626,42 +3620,6 @@ function liveMonthsCount(meta) {
   return Object.keys(ml).reduce(function (t, y) { return t + (ml[y] || []).length; }, 0);
 }
 
-// Only surface problems (baseline/offline). Successful/loading states stay quiet —
-// the dashes already indicate loading, and we don't want a "Live · Shopify" chip.
-function setLiveStatus(msg, cls) {
-  var el = document.getElementById("liveStatus");
-  if (!el) {
-    var slot = document.getElementById("tabBarStatus") ||
-      document.querySelector("header .meta") || document.body;
-    el = document.createElement("div");
-    el.id = "liveStatus";
-    slot.appendChild(el);
-  }
-  if (cls === "warn") {
-    el.textContent = msg;
-    el.className = "warn";
-    el.style.display = "";
-  } else {
-    el.textContent = "";
-    el.style.display = "none";
-  }
-}
-
-// Individual store brands start with a "soon" hint until their live data loads
-// (SG is always live). As each brand resolves, markBrandLive() clears or keeps it.
-function markComingSoonBrands() {
-  document.querySelectorAll("#brandMenu .bd-opt[data-v]").forEach(function (o) {
-    var b = o.dataset.v;
-    if (b !== "SG" && isLiveBrand(b)) o.classList.add("cs-soon");
-  });
-}
-// Toggle the "soon" hint on a brand menu option once we know if it's live.
-function markBrandLive(brand, ok) {
-  document.querySelectorAll('#brandMenu .bd-opt[data-v="' + brand + '"]').forEach(function (o) {
-    o.classList.toggle("cs-soon", !ok);
-  });
-}
-
 // Panels not yet backed by live Shopify data -> small "Coming soon" badge.
 // Shown on any live store view; baseline-only views stay clean.
 function markComingSoonPanels(isLiveOk) {
@@ -3740,8 +3698,8 @@ var TODAY_STR = (function () {
 // Connection indicator for the live-data handshake. Two states the user ever sees:
 // an amber spinner reading "Connecting…" and a green dot reading "Connected". A
 // failed load is NOT a terminal state — loadHistory() reschedules itself, so the
-// spinner simply keeps spinning until a load succeeds. The only quiet exception is a
-// store with no credentials in .env, which can't be retried into working.
+// spinner simply keeps spinning until a load succeeds. Those two are the only states
+// the chip ever shows; failures are never spelled out on screen.
 var ConnIndicator = (function () {
   var el, label;
 
@@ -3761,17 +3719,13 @@ var ConnIndicator = (function () {
     el.className = "conn connecting";
     label.textContent = "Connecting…";
   }
-  // done(true)        -> connected, live figures on screen
-  // done(false, true) -> store has no credentials in .env: muted, not retryable
-  // done(false)       -> genuine failure; stay on the spinner, a retry is pending
-  function done(ok, unconfigured) {
+  // done(true)  -> connected, live figures on screen
+  // done(false) -> not connected; fall back to the spinner
+  function done(ok) {
     ensure();
     if (ok) {
       el.className = "conn connected";
       label.textContent = "Connected";
-    } else if (unconfigured) {
-      el.className = "conn unconfigured";
-      label.textContent = "Not set up · no data";
     } else {
       start();
     }
@@ -3790,7 +3744,7 @@ function ensureHistory(brand) {
   // Otherwise point the chip at the brand now on screen, rather than leaving it
   // showing the previous brand's state.
   if (brand === state.brand) {
-    if (info.settled) ConnIndicator.done(info.ok, !info.ok);
+    if (info.settled) ConnIndicator.done(info.ok);
     else ConnIndicator.start();
   }
 }
@@ -3840,14 +3794,13 @@ function loadHistory(brand) {
   // On a retry after a partial payload, live figures are already on screen —
   // don't blank them back to dashes while the retry is in flight.
   if (!info.ok) blankLive(brand, [2024, 2025, 2026]);
-  if (current) { setLiveStatus("", ""); ConnIndicator.start(); }
+  if (current) ConnIndicator.start();
   reRender();
   return fetchJSON("/api/dashboard?light=1&brand=" + brand + "&start=2024-01-01&end=" + encodeURIComponent(TODAY_STR))
     .then(function (payload) {
       info.historyLoading = false;
       if (applyLive(brand, payload)) {
         info.ok = true;
-        markBrandLive(brand, true);
         // A partial payload means the ShopifyQL sales dataset was throttled, so
         // Revenue/Orders came back null (dashes). The server never caches
         // partials, so a short-delay retry gets a fresh attempt at Shopify.
@@ -3863,39 +3816,22 @@ function loadHistory(brand) {
           info.settled = true;
           info.histRetries = 0;
           info.failCount = 0;
-          if (partial && current) {
-            setLiveStatus(
-              "Some live figures couldn't load (Shopify rate limit) — refresh to retry.",
-              "warn",
-            );
-          }
         }
-        if (current) {
-          if (!partial) setLiveStatus("", "ok");
-          ConnIndicator.done(true);
-        }
+        if (current) ConnIndicator.done(true);
       } else {
         info.ok = false;
         var reason = payload && payload.meta ? payload.meta.reason : "unknown";
         // "not-configured" = that store's token/domain pair is blank in .env, so it is
         // deliberately skipped rather than broken: leave every live figure blank
-        // (dashes), settle it so we don't retry, and stay quiet — no warning banner.
-        // The brand keeps its "soon" hint and the connection chip reads "Not set up",
-        // so the reason is still discoverable. Other reasons are real failures: the
-        // spinner keeps spinning and we retry on a backoff until one attempt lands.
+        // (dashes) and settle it so we don't retry. Other reasons are real failures:
+        // we retry on a backoff until one attempt lands. Either way the chip stays on
+        // the spinner — the only states it ever shows are Connecting… and Connected.
         var unconfigured = reason === "not-configured";
         if (unconfigured) blankLive(brand, [2024, 2025, 2026]);
         else restoreBaseline(brand, [2024, 2025, 2026]);
         info.settled = unconfigured;
-        markBrandLive(brand, false);
         if (!unconfigured) scheduleHistoryRetry(brand);
-        if (current) {
-          setLiveStatus(
-            unconfigured ? "" : "Live data unavailable (" + reason + ") — retrying…",
-            unconfigured ? "" : "warn",
-          );
-          ConnIndicator.done(false, unconfigured);
-        }
+        if (current) ConnIndicator.done(false);
       }
       if (current) markComingSoonPanels(info.ok);
       reRender();
@@ -3903,12 +3839,8 @@ function loadHistory(brand) {
     .catch(function () {
       info.historyLoading = false; info.ok = false; info.settled = false;
       restoreBaseline(brand, [2024, 2025, 2026]);
-      markBrandLive(brand, false);
       scheduleHistoryRetry(brand);
-      if (current) {
-        setLiveStatus("Live data unavailable (offline) — retrying…", "warn");
-        ConnIndicator.done(false);
-      }
+      if (current) ConnIndicator.done(false);
       reRender();
     });
 }
@@ -4047,13 +3979,6 @@ function loadWindow(brand, start, end) {
     info.winLoading = false; info.winRange = key;
     LIVE_WIN[brand] =
       payload && payload.SG && payload.meta && payload.meta.live ? payload.SG : null;
-    if (!LIVE_WIN[brand] && brand === state.brand && payload && payload.meta &&
-        payload.meta.reason && payload.meta.reason !== "not-configured") {
-      setLiveStatus(
-        "Selected range unavailable (" + payload.meta.reason + ") — summary shows full-year figures.",
-        "warn",
-      );
-    }
     if (current && typeof liveState !== "undefined") {
       liveState.year = years[years.length - 1];
     }
@@ -4201,7 +4126,6 @@ function applyExtras(brand, sections, range) {
 })();
 
 // Render the all-null shell first, then load live data (SG first; other brands lazily on select).
-markComingSoonBrands();
 setBrand("SG");
 (function initLiveRange(){
   var d=new Date(),p=function(x){return String(x).padStart(2,"0");};
