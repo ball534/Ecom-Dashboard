@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "description": "iORA e-commerce performance dashboard — live data via Shopify (Vercel serverless).",
+  "description": "iORA e-commerce performance dashboard \u2014 live data via Shopify (Vercel serverless).",
   "engines": {
     "node": ">=18"
   },
@@ -15,6 +15,8 @@
     "preview-insights": "node scripts/preview-insights.js",
     "preview-ads": "node scripts/preview-ads.js",
     "preview-marketplace": "node scripts/preview-marketplace.js",
-    "test": "node scripts/test.js"
+    "test": "node scripts/test.js",
+    "probe-datasets": "node scripts/probe-datasets.js",
+    "probe-columns": "node scripts/probe-columns.js"
   }
 }

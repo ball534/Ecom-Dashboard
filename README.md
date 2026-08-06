@@ -1,399 +1,145 @@
-# iORA Live E-commerce Dashboard
+# Live Data Integration Plan
 
-A Vercel-deployable webapp that renders the iORA performance dashboard **1-to-1** with
-the original `LIVE DASHBOARD ALL BRANDS.html`, but makes it **functional** — pulling live
-data from **Shopify** (iORA SG) via a serverless API. Other channels (Lazada, Shopee,
-TikTok Shop, Sellercraft) and the other brands are scaffolded as **"Coming soon"** and
-will be added in later phases.
+Goal: light up every empty panel in the dashboard with **direct first-party API connections only** — no third-party aggregators or AI services in the data path. Every figure on the dashboard must be derived from an API pull; nothing hand-typed except the two internal files that have no API source (targets, commission).
 
-## How it works
+Architecture (in place and proven): one Vercel serverless function per source, credentials in environment variables (`.env` locally, Vercel project env in production), the browser only ever calls our own `/api/*` endpoints, and an unconfigured source returns `meta:{live:false, reason:"not-configured"}` so the UI shows an honest blank instead of an error.
 
-- **`public/index.html`** — the dashboard, render code untouched. **All baked-in
-  ("baseline") numbers were removed** — the data objects (`BRANDS`, `DISCOUNTS`,
-  `CHANNELMIX`, `PRODUCTS`/`PROD_*`, `CAT_REV*`, `SESSIONSRC`, `SALEMIX`, `FUNNEL`, …)
-  ship empty. On load the page is blank until it calls `/api/dashboard` and fills
-  **iORA SG** with live Shopify numbers, then recomputes aggregates and re-renders.
-  Everything not backed by the live API (the other 7 brands, prior years, Sessions,
-  Conversion, Targets, Best Sellers, Channel Mix, …) renders an honest "no data / not
-  connected" state — never a fabricated figure. If the API is unavailable the live
-  metrics show dashes (not stale numbers).
-- **`api/dashboard.js`** — Vercel serverless function. Server-side (token stays secret) it
-  pulls **ShopifyQL** analytics (`shopifyqlQuery`) for the exact sales + sessions figures and
-  the Orders API for the rest, aggregates into the dashboard's `{metric: {year: [12 months]}}`
-  shape, and returns JSON. CDN-cached 15 min.
-- **`api/_shopify.js`** — minimal Shopify Admin GraphQL client (zero deps): `fetchOrders`,
-  `shopifyQL` (ShopifyQL runner), and `verifyToken`.
-- **`lib/aggregate.js`** — pure aggregation math for the Orders path (order → monthly buckets).
-- **`lib/shopifyql.js`** — pure parser that turns ShopifyQL table rows into the metric shape.
-- **`scripts/`** — `verify-token.js` (auth check), `verify-shopifyql.js` (ShopifyQL/version
-  probe), `preview.js` (live month-by-month), and `test.js` (unit tests).
+---
 
-A small status note in the header surfaces only problems (e.g. "Live data unavailable
-(reason)"); on success the live numbers simply appear (dashes while a request is in flight).
+## Current state — after Phase 0 (built, verified end-to-end against the live SG store)
 
-### What is live vs. coming soon
-
-Every panel below is wired to a first-party API. A source with no credentials set reports
-`reason:"not-configured"` and its panel stays blank — the dashboard shows no figure it
-cannot attribute to an API pull.
-
-| Live (given credentials) | Source | Still unwired |
+| Dashboard area | Status | Source |
 |---|---|---|
-| Revenue, Orders, Units, Discounts, Sessions, Conversion | Shopify (ShopifyQL) | Email / Dotdigital block (phase 4) |
-| Voucher orders, New vs Returning customers | Shopify Orders API | Voucher `sent` counts + redemption rate (phase 4) |
-| Best Sellers, Category Mix, Discount codes, Traffic attribution | `/api/insights` | Commission panels (phase 5 — internal eQuip) |
-| Funnel, Pick-up vs Delivery, Sale vs Full-price, Promotion Calendar, website Voucher report | `/api/insights` + `/api/dashboard` | Sales targets until `lib/targets.js` is filled in |
-| **Ads tab — Facebook, Google, TikTok** (spend, impressions, clicks, purchases, revenue, ROAS, campaigns) | `/api/ads` | Campaign creative thumbnails; planned budgets (no API reports either) |
-| **Channel Mix — Website / Shopee / Lazada** | `/api/marketplace` + Shopify | TikTok Shop (no connector) |
-| **Marketplace voucher rows** in the Voucher report | `/api/marketplace` | |
+| Revenue, orders, AOV, units, sessions, conversion, discounts, customers | ✅ Live | Shopify (ShopifyQL + Orders API) via `/api/dashboard` |
+| Best sellers, category mix, discount codes, traffic attribution | ✅ Live | Shopify via `/api/insights` |
+| **Funnel (sessions → cart → checkout → purchase)** | ✅ Live | ShopifyQL sessions dataset (`sessions_with_cart_additions`, `sessions_that_reached_checkout`, `sessions_that_completed_checkout`) |
+| **Pick-up vs Delivery + collection points + delivery districts** | ✅ Live | Orders pull — pickup detected from the `"Pick Up @ <store>"` shipping-line title; delivery areas aggregated to 2-digit postal districts server-side (pickup orders' home zips excluded) |
+| **Sale vs full-price mix (revenue, units, SKUs)** | ✅ Live | Orders line items + batched GraphQL `compareAtPrice` lookup — a line is "sale" when it sold below its variant's current compare-at price |
+| **Per-month discount performance → Promotion Calendar** | ✅ Live | ShopifyQL `GROUP BY discount_code TIMESERIES month`. The "Automatic discounts" row shows only its discount value — its revenue/orders are *not attributable* from this dataset and render as "—", never a guess |
+| **Traffic sources (year + monthly) + landing pages** | ✅ Live | ShopifyQL `GROUP BY referrer_name TIMESERIES month` + `landing_page_path` |
+| **Voucher performance report (website)** | ✅ Live | Per-code revenue / redemptions / discount value / active window from the discount pulls. `sent` and redemption-rate need the email platform and render "—" until Phase 4 |
+| Sales targets (chaser + targets panel) | ⬜ Empty | `lib/targets.js` — hand-maintained, **still blank: fill it in** |
+| **Ads tab (Facebook / Google / TikTok)** | ✅ Built (phases 1–3) | `/api/ads` — Meta Marketing API, Google Ads API, TikTok Business API. Awaiting credentials; each platform independently reports `not-configured` until then |
+| **Channel mix (Website / Shopee / Lazada)** | ✅ Built (phase 6) | `/api/marketplace` — Shopee + Lazada order pulls, joined with the Shopify revenue series for the Website column. Awaiting partner approvals |
+| **Marketplace voucher rows** | ✅ Built (phase 6) | `/api/marketplace` — derived from the same order pull, in the website report's row shape |
+| Email (Dotdigital) block + voucher send counts | ⬜ Empty | needs Phase 4 |
+| Commission panels | ⬜ Empty | needs Phase 5 (internal eQuip/ECM) |
 
-### UI: tabs + At-a-Glance (2026-07 redesign)
+### Phase 0 implementation notes (for whoever maintains this)
+- Transport: order-derived sections (`fulfillment`, `saleMix`) ride the existing full `/api/dashboard` orders pull as `sections:{...}`; ShopifyQL sections (`funnel`, `discounts.monthly`, `traffic.byYear/landing`, `voucherReport`) come from `/api/insights`. Both merge into the front-end's `LIVE_EXTRAS` per brand; each section is individually best-effort with per-section `meta.sections.<key>` reasons.
+- Orders are paged at 250/page (measured cost 464 requested / 51 actual vs the 1,000-point single-query cap); the compareAt lookup runs 2 chunks in flight under a 20s budget and fails its section cleanly (`reason:"timeout"`, uncached) rather than timing out the whole payload.
+- ShopifyQL throttles the tail of the 11-query insights fan-out on cold, busy loads; the front-end refetches throttled sections up to 3 times with widening spacing. Transient failures are never edge-cached; deterministic ones (e.g. missing scope) are, so a broken scope can't disable caching forever.
+- Honesty rules enforced and E2E-tested: no value is ever estimated; unattributable = `null` = "—"; failed ≠ zero (pending states, not zero-claims); cancelled orders excluded from the new sections so they tie to the ShopifyQL KPIs; pickup customers' home districts never counted as delivery regions.
+- Watch item: a cold full-year orders pull took ~89s from a home connection (Vercel→Shopify is much faster and `api/dashboard.js` has `maxDuration: 60`, the Hobby-plan ceiling). If the fulfillment/sale-mix sections ever 504 in production on long ranges, either raise `maxDuration` (Pro plan) or narrow the phase-2 window.
+- Known UI debt: the discount panel's per-month drill-down view exists and is guarded, but its entry point (the old deck filter) is hidden for live data because the old filter *rescaled* figures. Month-level discount detail is visible via the Promotion Calendar and the "Best Performing Discount" column.
+- Newly discovered ShopifyQL dimensions worth future panels (all live-testable with existing keys): `billing_country` / `billing_region` (a REAL sales-by-country split — the old fabricated one was removed), `pos_location_name`, `staff_member_name`, `order_referrer_source`.
 
-The page opens with an **At a Glance** hero — headline tiles with like-for-like
-year-on-year chips (same calendar months, both years) and **auto-written insight
-bullets** (sales headline, pace vs target, biggest YoY mover, top discount code,
-best seller, traffic anomalies). Below it, panels are organised into tabs:
-**Overview · Sales · Marketing · Products · Customers**. KPI chips use the same
-like-for-like YoY rule as the hero, so the two always agree. Dense tables are
-folded behind "Show table" toggles; the charts stay visible.
+---
 
-### `/api/insights` — the insight sections
+## Phases 1–3 — ad platforms (BUILT, awaiting credentials)
 
-`GET /api/insights?brand=SG&start=YYYY-MM-DD&end=YYYY-MM-DD&limit=10` returns, in
-one round trip: best sellers (by SKU + by product title), discount-code
-performance, category mix, traffic attribution (referrers, order sources, UTM
-campaigns) and sales targets. All six ShopifyQL calls run in parallel
-(`Promise.allSettled`); a failed section returns `null` with a reason in
-`meta.sections.<key>` — the payload never 500s. See `lib/insights.js` (pure
-builders/parsers, unit-tested) and `api/insights.js`.
+One endpoint, `/api/ads`, serves the whole tab (the plan originally proposed three
+endpoints; the tab needs all three platforms at once, so they fan out inside one function
+with per-platform `meta`, exactly like `/api/insights`' sections). Files:
 
-**One file the team maintains by hand** (validated by `npm test`):
-
-- **`lib/targets.js`** — monthly sales targets per brand/year (`{year: [12]}`,
-  null = no target). Feeds the Sales tab's Target vs Actual panel and the
-  "tracking ahead/behind target" insight bullet. Targets exist nowhere in Shopify,
-  so this is the only figure on the dashboard that is not pulled from an API.
-
-Everything else on the dashboard is pulled live. `lib/category-map.js` (SKU prefix →
-category) was **removed**: Category Mix now groups on Shopify's own `product_type`, and
-sales with no `product_type` set are reported as unclassified rather than assigned a
-guessed category. Discount terms likewise come from the merchant's configured discounts
-via `codeDiscountNodeByCode`, not a local table. Run `npm run preview-insights` to see
-how much of a range Shopify has no `product_type` for.
-
-## ✅ Token status (as of 2026-06-18)
-
-The key in `.env` is a valid `shpat_` Admin API token — `npm run verify-token` authenticates
-against **iORA** (`iora-online.myshopify.com`, SGD, `Asia/Singapore`). Live data flows.
-
-### Where each number comes from (so they tally with the Shopify admin)
-
-Two server-side sources, both via the **same Admin API + `shpat_` token** — **no Claude/MCP at runtime:**
-
-- **ShopifyQL** (`shopifyqlQuery`, the engine behind the admin Analytics page) → the **exact** figures,
-  no reconstruction: **Gross Sales** (`rev`), **Discounts** (`dis`), **Orders** (`ord`), **Sessions**
-  (`ses`), **Conversion** (`conversion`). See `lib/shopifyql.js`.
-- **Orders API** → **Units** (`uni`), **Voucher** (`vou`), **New/Returning customers** (`cust`/`ret`),
-  which ShopifyQL doesn't expose as clean columns. See `lib/aggregate.js`.
-
-| Metric | Definition |
+| File | Role |
 |---|---|
-| **Gross Sales** (`rev`) | ShopifyQL `gross_sales` — product price × qty before discounts/returns/tax/shipping. Exact match to the admin. |
-| **Orders** (`ord`) | ShopifyQL `orders` (matches the admin; excludes cancelled, unlike a raw order count). |
-| **Discounts** (`dis`) | ShopifyQL `discounts` (reported negative; stored as a positive magnitude). |
-| **Avg Order Value** | (Gross Sales − discounts) ÷ orders, computed in the front-end tile — equals ShopifyQL `average_order_value`. |
-| **Sessions** (`ses`) | ShopifyQL `sessions` — storefront visits. |
-| **Conversion** (`conversion`) | ShopifyQL `conversion_rate`; aggregated session-weighted (Σ rate·sessions ÷ Σ sessions) so quarter/year totals match the admin. |
-| **Units** (`uni`) | Orders API — **gross** quantity ordered ("Items ordered"); not net of refunds. |
-| **Voucher** (`vou`) | Orders API — orders that redeemed a **gift card / store credit** (`paymentGatewayNames`). ⚠️ *Not* "orders with a discount code". |
-| **New / Returning** (`cust`/`ret`) | Orders API — **distinct customers** per month; "New" = first-ever order is in-month. See `classifyNewReturning`. |
+| `api/ads.js` | fan-out + per-platform `meta`, one calendar year per pull, 45s budget |
+| `lib/ads.js` | provider-agnostic roll-up: daily rows → monthly + Mon–Sun weekly series + campaign rows |
+| `lib/ads-meta.js` / `lib/ads-google.js` / `lib/ads-tiktok.js` | one client each, all returning the same `{currency, supports, rows, notes}` shape |
+| `lib/http.js` | shared REST client: typed reasons, bounded retries, per-attempt timeouts, wall-clock budgets |
+| `lib/env-keys.js` | brand → env-var resolution (per-store identifiers, falling-back credentials) |
 
-Residuals vs the admin are **live drift** — orders placed between when the Analytics page was viewed and
-when the dashboard queried (the store takes orders all day).
+`npm run preview-ads [brand] [year]` prints exactly what the tab will show.
 
-### ShopifyQL needs API version ≥ 2025-10
+### Phase 1 — Meta Marketing API (Facebook ads) — what's still needed from Meta
+1. **Meta Business Settings → Users → System users**: create a system user (Employee), assign the ad accounts with View-performance access.
+2. Business app + Marketing API product → **system-user token** scoped to `ads_read` (long-lived; no App Review for your own accounts).
+3. Set `META_ACCESS_TOKEN` and `META_AD_ACCOUNT_<STORE>` (`_SG`/`_MY` accepted for the two iORA stores; comma-separate multiple accounts). **Lead time:** same-day with a Business Manager admin.
 
-`shopifyqlQuery` is **not present** on Admin API versions ≤ 2025-07 — which is why an earlier note here
-wrongly concluded ShopifyQL was "removed." It was (re)introduced in **2025-10**; the token already holds
-`read_reports`/`read_analytics`, and the store is on **Shopify Plus**, so it works. `SHOPIFY_API_VERSION`
-is pinned to `2025-10`.
+Implementation notes: daily campaign insights (`time_increment=1`), paged via `paging.next`, token sent as a Bearer header (never in the query string). Purchases take the FIRST matching action type from `omni_purchase` → `purchase` → `offsite_conversion.fb_pixel_purchase` — summing them would double-count the same purchase. Two accounts reporting different currencies is refused rather than added together. If Meta sunsets `META_API_VERSION`, the client retries once on the Graph default version and says so in `notes`.
 
-**Fallback:** if `shopifyqlQuery` is ever unavailable (older API version, or a token without reports
-access), `api/dashboard.js` falls back to reconstructing `rev`/`dis`/`ord` from the Orders API line items
-(tax stripped per line) and Sessions/Conversion show **dashes**. `meta.salesSource`
-(`shopifyql` | `reconstructed`) and `meta.sessionsLive` report which path was taken.
+### Phase 2 — Google Ads API — what's still needed from Google
+1. MCC → **API Center** → developer token → apply for **Basic access** (1–2 weeks).
+2. Google Cloud project + OAuth client + refresh token for an MCC reader.
+3. Set `GOOGLE_ADS_DEVELOPER_TOKEN`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_REFRESH_TOKEN`, `_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CUSTOMER_<STORE>`.
 
-Run `npm run verify-shopifyql` to confirm ShopifyQL access + the working API version, and
-`npm run preview` to print the live month-by-month numbers and eyeball them against the admin.
+Implementation notes: `googleAds:searchStream` with GAQL over `campaign` × `segments.date`; access token minted per cold start and cached (Google's refresh token does not rotate). Google has no "purchases" metric, so the figures are `metrics.conversions` / `conversions_value` — **every** action the account counts as a conversion. That caveat is served in `notes` and rendered on the panel; the tab's Google table deliberately has no Purchases row. Pin `GOOGLE_ADS_API_VERSION` when Google sunsets the default.
 
-### Date range (live)
+### Phase 3 — TikTok Business API — what's still needed from TikTok
+1. TikTok for Business Developers app with the Reporting scope; authorize the advertiser accounts → long-term token + advertiser ids.
+2. Set `TIKTOK_ACCESS_TOKEN`, `TIKTOK_ADVERTISER_<STORE>`.
 
-The header has **From / To** date pickers (default: 1 Jan of the current year → today).
-Changing either re-queries Shopify for that window and re-renders in place. The endpoint
-accepts `GET /api/dashboard?start=YYYY-MM-DD&end=YYYY-MM-DD` and buckets by month across any
-years the range spans. Months outside the selected range render as dashes (`–`). While a
-request is in flight, the live metrics show **dashes**, so it's always clear whether live data
-has loaded. Selecting a range that spans prior years pulls those live too (the token has
-`read_all_orders`), though new-vs-returning is only accurate for the current year — see the caveat below.
+Implementation notes: `/report/integrated/get/`, `report_type=BASIC`, `AUCTION_CAMPAIGN` × `stat_time_day`. TikTok's metric vocabulary shifts between versions and has no stable purchase-value metric, so the client requests only unambiguous names and derives revenue from the first arithmetic the response supports: `TIKTOK_REVENUE_METRIC` if set → `value_per_complete_payment × complete_payment` → `complete_payment_roas × spend` → else **null** ("—"). Whichever applied is stated in `notes`. If the metric list is rejected outright it retries with spend/impressions/clicks so spend stays real and the conversion columns read "—". `TIKTOK_METRICS` overrides the list.
 
-## Shopify scopes required
+### Phase 4 — Dotdigital (email) — *confirm the platform first*
+**Feeds:** Ads tab → Dotdigital block, plus the voucher report's `sent` counts and redemption rates (currently honest "—").
+> Confirm marketing is staying on Dotdigital; if moving to Klaviyo, build the same panel against Klaviyo's reporting API instead.
+1. Dotdigital **Settings → Access → API users** → API user (Basic auth) + regional base URL.
+2. Build `api/email.js`: campaign list + per-campaign send/delivered/open/click stats. **Money stays Shopify-attributed** (UTM-matched orders we already pull) — the ESP only supplies engagement counts.
+```
+DOTDIGITAL_API_USER=
+DOTDIGITAL_API_PASSWORD=
+DOTDIGITAL_BASE_URL=
+```
 
-Read-only. Every scope below is traceable to a specific call in `api/_shopify.js`:
+### Phase 5 — Commission (internal ECM / eQuip — no public API)
+**Feeds:** Commission KPI + store breakdown. Ask IT whether eQuip exposes a reporting API or scheduled export; build `api/commission.js` against it if so. Until then: a validated, hand-maintained `lib/commission.js` mirroring the targets pattern (a copy of the ECM report, labelled with its as-of date — never an estimate).
 
-| Scope | Needed for |
+### Phase 6 — Shopee & Lazada Open Platforms (BUILT, awaiting partner approvals)
+**Feeds:** Channel Mix (proven impossible from Shopify alone) and marketplace voucher performance.
+
+| File | Role |
 |---|---|
-| `read_reports` | `shopifyqlQuery` — all the `FROM sales` / `FROM sessions` / `FROM fulfillments` queries in `lib/shopifyql.js` and `lib/insights.js` |
-| `read_analytics` | the `FROM sessions` datasets (sessions, conversion_rate, referrer_source, utm_campaign) |
-| `read_orders` | `fetchOrders()` — Units, Voucher, New/Returning, and the sales fallback path |
-| `read_all_orders` | without it the Orders path only reaches back **60 days**. Requires Shopify approval |
-| `read_customers` | `customer { id numberOfOrders }` in `ORDERS_QUERY` — drives new-vs-returning |
-| `read_products` | `fetchProductImagesByTitle()` — best-seller thumbnails via `products(query: "title:…")` |
-| `read_discounts` | `fetchDiscountTerms()` — the configured terms behind each code (value, minimum spend, usage limits) shown in the Promotions panels |
+| `api/marketplace.js` | fan-out + per-channel `meta`, 45s budget |
+| `lib/shopee.js` | v2 signing, 15-day order windows → 50-per-call order details, rotating-token handling |
+| `lib/lazada.js` | REST signing, `/orders/get` paging (order `price` comes back on the list — no detail call) |
+| `lib/marketplace.js` | orders → monthly channel series, order counts, totals, voucher rows |
+| `lib/token-store.js` | durable storage for the rotating token pairs |
 
-```
-read_reports, read_analytics, read_orders, read_all_orders, read_customers, read_products, read_discounts
-```
+`npm run preview-marketplace [brand] [year]` prints the months, the voucher rows and which
+token-store backend is live.
 
-Plus **protected customer data** access, requested inside the app config — it is *not* a
-scope checkbox, and `read_customers` alone won't return customer fields without it. Denial
-degrades gracefully: `ShopifyError` with `reason: "scope"` and the panel shows dashes.
+**Still needed from the marketplaces**
+- Shopee Open Platform: partner id/key + per-shop authorization → `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY`, `SHOPEE_SHOP_ID_<STORE>`, seed `SHOPEE_ACCESS_TOKEN_<STORE>` + `SHOPEE_REFRESH_TOKEN_<STORE>`.
+- Lazada Open Platform: app key/secret + per-country seller authorization → `LAZADA_APP_KEY`, `LAZADA_APP_SECRET`, seed `LAZADA_ACCESS_TOKEN_<STORE>` + `LAZADA_REFRESH_TOKEN_<STORE>`.
+- **`TOKEN_STORE_URL` + `TOKEN_STORE_TOKEN` (Upstash-compatible Redis REST).** Not optional in production: both marketplaces invalidate the old refresh token on every refresh, and env vars are read-only at runtime. Without it the rotated pair lives in the instance's temp dir and a redeploy strands it, after which the pull fails with an actionable `reason:"auth"`. `meta.tokenStore` reports the active backend.
 
-`rights.md` records the full scope list currently granted on the store; it is a superset of
-the above (most of it is unused by this repo). Note that `FROM fulfillments` goes through
-ShopifyQL/`read_reports` — the fulfillment scopes are **not** needed. `read_discounts`
-IS now needed, but only for the *terms* behind each code (what the customer gets);
-discount-code **performance** still comes from ShopifyQL, so without the scope the
-Promotions figures are unaffected and only the terms line shows "—".
+**Implementation notes**
+- Voucher rows are derived from the SAME order pull (per-order `voucher_code`), not from a voucher endpoint — so a marketplace voucher's sales and redemptions are the orders that actually used it, mirroring how the website report is derived from discount pulls. `sent` and redemption rate stay null ("—"): neither marketplace reports how many vouchers were issued.
+- Shopee's order detail may not offer `voucher_code`/`seller_discount` on every API build; a rejection falls back to the safe field set, and the *voucher rows* (never the revenue) are what goes missing — stated in `notes`.
+- Cancelled and unpaid orders are pulled but excluded from every figure, matching how the Shopify KPIs exclude cancelled orders; `meta.channels.<ch>.excluded` reports the count so a difference from a raw seller-centre export is explainable.
+- **A pull that runs out of budget fails its channel** (`reason:"timeout"`) instead of serving the pages it managed: a half-paged month understates revenue, and a wrong number is worse than a missing one.
+- Definitions differ and the panel says so: Website = ShopifyQL gross sales; Shopee/Lazada = the buyer-paid order value each marketplace reports. Do not reconcile them to the cent.
+- Roll-up brands (SGALL/MYALL/GROUP) sum their members client-side, with `FX_MYR_SGD` applied for the cross-currency Group — the same rule the sales metrics already use.
 
-### Getting a working token (`shpat_`)
+### Quick win needing no API at all
+Fill `lib/targets.js` from the consolidated ECM targets file — the target chaser and targets panel are fully wired and waiting (`npm test` validates the shape).
 
-1. In the **iORA SG** Shopify admin: **Settings → Apps and sales channels → Develop apps**.
-2. **Create an app** (e.g. "Dashboard Read").
-3. **Configure Admin API scopes**: enable the six listed above, then request **protected
-   customer data** access in the same app config.
-4. **Install app**, then **reveal the Admin API access token** — it starts with `shpat_`.
-5. Put it in `.env` as `TOKEN_IORASG` (and in Vercel env vars for production).
-6. Confirm the store domain in `DOMAIN_IORASG` (auto-detected: `iora-online.myshopify.com`).
+---
 
-Repeat per store, using that store's own admin. Note that only iORA SG's app hands out a
-permanent token — for the other seven, take the app's **client id + client secret** instead
-and put them in `CLIENT_<STORE>`/`SECRET_<STORE>`; the API then mints its own 24-hour tokens
-(see **Expiring tokens** below). Store suffixes are in the table below.
+## Cross-cutting rules (unchanged, now enforced in code)
+1. Keys server-side only (`.env` / Vercel env). Nothing in the HTML, ever.
+2. Honest failure: `reason:"not-configured"` → empty state; failed ≠ zero; unattributable = null = "—". No placeholders, estimates, or "illustrative" data.
+3. Caching: complete payloads edge-cached ~5 min; transient failures `no-store`; deterministic per-section failures don't block caching.
+4. Data handling: aggregated only — postal districts (2 chars) are the only address-derived data served, and only for delivery orders.
+5. Each new source plugs into the existing overlay: fetch on brand select, per-section meta, merge into `LIVE_EXTRAS`, re-render in place.
 
-## Setup & run
+## Suggested order
+| Phase | What | Code | What's left |
+|---|---|---|---|
+| ~~0~~ | ~~Shopify: funnel, pickup/delivery, vouchers (web), sale mix, monthly discounts, traffic~~ | ✅ **done** | — |
+| ~~1~~ | Meta ads | ✅ **built** | system-user token + ad account ids (same-day) |
+| ~~2~~ | Google ads | ✅ **built** | developer-token Basic access (1–2 wks) + OAuth refresh token |
+| ~~3~~ | TikTok ads | ✅ **built** | app approval (days) + advertiser ids; confirm metric names against the live account |
+| ~~6~~ | Shopee + Lazada | ✅ **built** | partner/seller approvals (weeks) + a Redis token store |
+| — | Fill `lib/targets.js` | — | 0.5 day, no API needed |
+| 4 | Dotdigital email (+ voucher send counts) | ⬜ | 3 vars, confirm the platform first, 1–2 days |
+| 5 | Commission (internal) | ⬜ | ask IT re: eQuip; 0.5 day for the lib file |
 
-```bash
-# 1. Install Vercel CLI (only needed for local dev / deploy)
-npm i -g vercel
-
-# 2. Configure secrets: cp .env.example .env, then fill it in — one
-#    SHOPIFY_API_VERSION, a DOMAIN_ per store, plus TOKEN_IORASG and a
-#    CLIENT_/SECRET_ pair for the seven stores with expiring tokens
-
-# 3. Check the credentials authenticate (mints a token where needed)
-npm run verify-token                 # iORA SG
-node scripts/verify-token.js TRTSG   # any other store
-
-# 4. Run the unit tests (no token needed)
-npm test
-
-# 5. Local dev (serves public/ + runs api/ functions)
-vercel dev
-#    open http://localhost:3000
-
-# 6. Deploy
-vercel            # preview
-vercel --prod     # production
-```
-
-### Environment variables
-
-All eight stores share one Admin API version; each store has its own token + permanent
-domain. Set these under **Project → Settings → Environment Variables** on Vercel (and in
-`.env` locally — see `.env.example` for the annotated template).
-
-| Variable | Store | Brand key |
-| --- | --- | --- |
-| `SHOPIFY_API_VERSION` | shared by all stores (`2025-10`) | — |
-| `TOKEN_IORASG` / `DOMAIN_IORASG` | iORA SG (permanent token) | `SG` |
-| `CLIENT_IORAMY` / `SECRET_IORAMY` / `DOMAIN_IORAMY` | iORA MY | `MY` |
-| `CLIENT_TRTSG` / `SECRET_TRTSG` / `DOMAIN_TRTSG` | The Restyle Trait SG | `TRTSG` |
-| `CLIENT_TRTMY` / `SECRET_TRTMY` / `DOMAIN_TRTMY` | The Restyle Trait MY | `TRTMY` |
-| `CLIENT_SANSSG` / `SECRET_SANSSG` / `DOMAIN_SANSSG` | SANS & SANS SG | `SANSSG` |
-| `CLIENT_SANSMY` / `SECRET_SANSMY` / `DOMAIN_SANSMY` | SANS & SANS MY | `SANSMY` |
-| `CLIENT_MONOSG` / `SECRET_MONOSG` / `DOMAIN_MONOSG` | MONOLOQ SG | `MONOSG` |
-| `CLIENT_MONOMY` / `SECRET_MONOMY` / `DOMAIN_MONOMY` | MONOLOQ MY | `MONOMY` |
-
-Every store also still accepts a plain `TOKEN_<STORE>`, which takes precedence over its
-`CLIENT_`/`SECRET_` pair (see **Expiring tokens** below).
-
-Resolved by `resolveConfig()` in `api/_shopify.js`. Notes:
-
-- The **brand key** is the dashboard's internal id (`/api/dashboard?brand=SG`). It matches
-  the env suffix for every store except the two iORA ones: brand `SG` → `TOKEN_IORASG`,
-  brand `MY` → `TOKEN_IORAMY`.
-- **Domain** = the store's permanent `<handle>.myshopify.com`, *not* the public storefront.
-- A store whose pair is left **empty** is skipped: `/api/dashboard` returns
-  `reason: "not-configured"`, that store's figures stay blank (dashes), and it drops out of
-  the SG/MY/Group roll-ups — quietly, with no warning banner. Setting a wrong or
-  placeholder value is worse: the store counts as live and fails on auth.
-- The two values are easy to enter the wrong way round. `getConfig()` recognises a
-  transposed pair (a `<handle>.myshopify.com` in `TOKEN_*` and a `shp…_` token in
-  `DOMAIN_*`), reads it swapped so live data still loads, and logs a one-line warning
-  naming the pair. Transpose the values in `.env`/Vercel to clear the warning — without
-  the guard the token is used as a hostname and the store fails with the misleading
-  `reason: "http"` ("Network error reaching Shopify").
-- Legacy names are still accepted as a fallback so an existing deployment keeps working:
-  `SHOPIFY_TOKEN`/`SHOPIFY_KEY` + `SHOPIFY_STORE_DOMAIN` for iORA SG, and
-  `SHOPIFY_TOKEN_<BRAND>` + `SHOPIFY_DOMAIN_<BRAND>`/`SHOPIFY_STORE_DOMAIN_<BRAND>` for the
-  rest. A single store can override the shared version with `SHOPIFY_API_VERSION_<BRAND>`.
-
-**Never commit `.env`** (it is gitignored, as is `oauth/`).
-
-### Environment variables — ads & marketplaces
-
-`/api/ads` and `/api/marketplace` use the **same store suffixes** as Shopify
-(`IORASG`, `IORAMY`, `TRTSG`, …). Two rules, implemented in `lib/env-keys.js`:
-
-- **Identifiers are per store, with no market fallback.** `META_AD_ACCOUNT_TRTSG` is read
-  only for TRT SG; SANS SG will *not* silently inherit iORA SG's ad account, because that
-  would report one brand's spend as another's. For the two iORA stores the plan's shorter
-  `_SG` / `_MY` spellings are accepted as well.
-- **Credentials fall back** store → market → bare: `META_ACCESS_TOKEN_TRTSG` →
-  `META_ACCESS_TOKEN_SG` → `META_ACCESS_TOKEN`, so one app token can serve every store.
-
-| Group | Variables | Notes |
-| --- | --- | --- |
-| Meta ads | `META_ACCESS_TOKEN`, `META_AD_ACCOUNT_<STORE>`, `META_API_VERSION` | System-user token with `ads_read`; accounts may be comma-separated |
-| Google ads | `GOOGLE_ADS_DEVELOPER_TOKEN`, `_CLIENT_ID`, `_CLIENT_SECRET`, `_REFRESH_TOKEN`, `_LOGIN_CUSTOMER_ID`, `GOOGLE_ADS_CUSTOMER_<STORE>`, `GOOGLE_ADS_API_VERSION` | Developer token needs Basic access |
-| TikTok ads | `TIKTOK_ACCESS_TOKEN`, `TIKTOK_ADVERTISER_<STORE>`, `TIKTOK_API_VERSION`, `TIKTOK_METRICS`, `TIKTOK_REVENUE_METRIC` | The last two only matter if this API version renames its metrics |
-| Ad targets | `ADS_TARGET_ROAS`, `ADS_TARGET_CTR` | Optional. Blank ⇒ the "vs target" chips are hidden rather than compared against an invented target |
-| Shopee | `SHOPEE_PARTNER_ID`, `SHOPEE_PARTNER_KEY`, `SHOPEE_SHOP_ID_<STORE>`, `SHOPEE_ACCESS_TOKEN_<STORE>`, `SHOPEE_REFRESH_TOKEN_<STORE>`, `SHOPEE_HOST` | |
-| Lazada | `LAZADA_APP_KEY`, `LAZADA_APP_SECRET`, `LAZADA_ACCESS_TOKEN_<STORE>`, `LAZADA_REFRESH_TOKEN_<STORE>`, `LAZADA_HOST[_<STORE>]` | |
-| Token store | `TOKEN_STORE_URL`, `TOKEN_STORE_TOKEN` | **Required in production for Shopee/Lazada** — see below |
-
-#### Rotating marketplace tokens need a token store
-
-Shopify's grant can be re-run at will from `CLIENT_`/`SECRET_`, so it needs no storage.
-Shopee and Lazada are different: **every refresh invalidates the previous refresh token**
-and issues a new one. Env vars are read-only at runtime, so `lib/token-store.js` persists
-the live pair — to an Upstash-compatible Redis REST service if `TOKEN_STORE_URL` +
-`TOKEN_STORE_TOKEN` are set, otherwise to the instance's temp directory (survives warm
-invocations only), otherwise memory. `/api/marketplace` reports which backend is in use as
-`meta.tokenStore`, and `npm run preview-marketplace` prints it. Without Redis, a redeploy
-falls back to the seed token in the env — which by then is spent — and the pull fails with
-`reason:"auth"` telling you to re-authorize. Set the two variables before relying on
-Shopee/Lazada.
-
-### Expiring tokens: the API mints its own
-
-Only **iORA SG**'s app issues a permanent `shpat_` token. The other seven stores' apps issue
-tokens that **expire after ~24 hours**, which used to mean re-running `oauth/main.py` and
-re-uploading eight variables to Vercel every day.
-
-That is no longer necessary. `api/_token.js` performs the same OAuth **client_credentials**
-exchange the script did, inside the serverless function, at request time:
-
-```
-POST https://<shop>.myshopify.com/admin/oauth/access_token
-     grant_type=client_credentials&client_id=<CLIENT_…>&client_secret=<SECRET_…>
-  → { access_token: "shpat_…", expires_in: 86399 }
-```
-
-The `client_id` / `client_secret` pair **never expires**, so those are the only credentials
-Vercel holds. Behaviour:
-
-- **Precedence** — `TOKEN_<STORE>` set → used verbatim (iORA SG). Otherwise, if
-  `CLIENT_<STORE>` + `SECRET_<STORE>` are set → a token is minted. Otherwise the store
-  reports `reason: "not-configured"` exactly as before.
-- **Caching** — a minted token is held in the lambda's module scope until 10 minutes before
-  its expiry, so a warm instance mints once (not once per request); concurrent requests for
-  the same store share a single in-flight mint. A cold start mints again — one extra ~200 ms
-  call. Vercel instances don't share memory, so if that volume ever matters, swap the `Map`
-  in `api/_token.js` for Vercel KV; nothing else changes.
-- **Mid-request expiry** — if Shopify answers `401` on a minted token (rotated credentials,
-  app reinstalled, or a long multi-year pull straddling the expiry), the query re-mints once
-  and retries automatically. `403` is left alone: that's a missing scope, which a new token
-  can't fix.
-- **Failure** — a rejected `client_id`/`secret` surfaces as `meta.reason: "auth"` with the
-  Shopify response in `meta.message`, not a 500.
-- **Naming** — the `<STORE>_CLIENT` / `<STORE>_SECRET` / `<STORE>_DOMAIN` spelling used by
-  `oauth/.env` is also accepted, so that file's contents can be pasted into Vercel unchanged.
-
-Check any store end to end (mints, then calls the Admin API):
-
-```bash
-npm run verify-token                 # iORA SG
-node scripts/verify-token.js TRTSG   # any other store
-```
-
-`oauth/main.py` is now redundant — kept only as a reference for the grant. It contains live
-client secrets, so `oauth/` is gitignored.
-
-### `/api/ads` and `/api/marketplace`
-
-`GET /api/ads?brand=SG&start=YYYY-MM-DD&end=YYYY-MM-DD` returns all three ad platforms in
-one round trip: `platforms.{fb,google,tiktok}` (monthly + Mon–Sun weekly series) and
-`campaigns.{…}` (one row per campaign), plus per-platform `meta.platforms.<key>` carrying
-`ok`/`reason`, the account currency, and **notes** — how a figure was obtained when the
-platform made it ambiguous (e.g. "TikTok revenue = value_per_complete_payment ×
-complete_payment", "Google figures use metrics.conversions"). Those notes render on the
-panel that shows the numbers. The Ads tab renders one calendar year at a time, so a range
-spanning years is clamped to its end year (`meta.range.clamped`) rather than merging two
-Januaries into one column. Selecting a year in the tab loads it.
-
-Things no ad API reports, and which the dashboard therefore leaves blank: **planned
-budgets** (so the Budget / Utilisation rows disappear rather than show dashes) and
-**performance targets** (`ADS_TARGET_*` above).
-
-`GET /api/marketplace?brand=SG&start=…&end=…` returns `channels.{Shopee,Lazada}` (monthly
-revenue + order counts) and `vouchers[]` in the same row shape as the website voucher
-report, so the deck renders both with one channel filter. Channel Mix's **Website** column
-is the store's own Shopify revenue series, joined client-side. The definitions differ and
-the panel says so: Website is ShopifyQL gross sales, marketplace figures are the
-buyer-paid order value each marketplace reports, cancelled and unpaid orders excluded.
-
-A marketplace pull that exceeds its 45-second budget **fails its channel** (`reason:
-"timeout"`) instead of serving the pages it managed — half a month of orders would
-understate a channel's revenue, and a wrong number is worse than a missing one.
-
-## Verification checklist
-
-- `npm test` → all unit tests pass (Orders + ShopifyQL parsing, ads roll-ups, marketplace
-  aggregation, request/signing layers).
-- `npm run preview-ads [brand] [year]` → prints the Ads tab's figures per platform, or
-  `not-configured` per platform. Run it after adding each credential set.
-- `npm run preview-marketplace [brand] [year]` → prints Channel Mix months, marketplace
-  voucher rows, and which token-store backend is active.
-- `npm run verify-token` → ✅ the `shpat_` token authenticates against iORA SG.
-- `npm run verify-shopifyql` → ✅ `shopifyqlQuery` returns live sales + sessions; prints the
-  lowest API version that works (pin `SHOPIFY_API_VERSION` to it).
-- `vercel dev` → dashboard renders; with a valid token the iORA SG current-year numbers — including
-  **Sessions & Conversion** — match the Shopify Analytics page (within live drift), and every
-  non-live panel/brand shows an honest "no data" state; with a bad/missing token the live metrics
-  show dashes (no fabricated numbers).
-
-## Notes / current limitations
-
-- Orders are fetched by cursor pagination (250/page). For very large multi-year pulls,
-  switch to Shopify **Bulk Operations** (the aggregation logic in `lib/aggregate.js` is
-  unchanged). Line items are read 100/order — orders with >100 lines would undercount units.
-- New-vs-returning is accurate **only for the current year** (the method assumes a customer's
-  out-of-window orders are necessarily prior, which holds when there are no future orders). For
-  historical years, classification would need a first-order-date map built from `read_all_orders`.
-- The default window is the current calendar year to date, derived from the shop's date
-  (`Asia/Singapore`) in `api/dashboard.js` — no hardcoded year to bump.
-- Timezone: order months are bucketed in `Asia/Singapore`.
-
-## Roadmap (next integrations)
-
-See `INTEGRATION-PLAN.md` for the full state. Built: Shopify (phase 0), Meta / Google /
-TikTok ads (phases 1–3), Shopee + Lazada (phase 6). Remaining:
-
-1. **Phase 4 — email (Dotdigital or Klaviyo).** Lights up the Ads tab's email block and the
-   voucher report's `sent` counts / redemption rates, which currently render "—".
-2. **Phase 5 — commission (internal eQuip/ECM).** No public API known; ask IT for a
-   reporting endpoint or scheduled export, else a hand-maintained `lib/commission.js`
-   mirroring the `lib/targets.js` pattern.
-3. Fill `lib/targets.js` (no API needed — the target chaser and targets panel are wired and
-   waiting).
+### Verifying a credential set once it lands
+1. `npm run preview-ads SG` / `npm run preview-marketplace SG` — per-platform output or a
+   `not-configured` line naming the exact variables to set.
+2. `npm test` — the pure layers (roll-ups, signing, request/error mapping) need no keys.
+3. `vercel dev` → open the Ads tab and the Channel Mix panel; a platform that answered but
+   had no spend says so, which is different from one that isn't connected.
