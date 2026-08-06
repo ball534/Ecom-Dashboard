@@ -164,8 +164,10 @@ ShopifyQL/`read_reports` — the fulfillment scopes are **not** needed. Neither 
 5. Put it in `.env` as `TOKEN_IORASG` (and in Vercel env vars for production).
 6. Confirm the store domain in `DOMAIN_IORASG` (auto-detected: `iora-online.myshopify.com`).
 
-Repeat per store, using that store's own admin and its `TOKEN_*`/`DOMAIN_*` pair from the
-table below.
+Repeat per store, using that store's own admin. Note that only iORA SG's app hands out a
+permanent token — for the other seven, take the app's **client id + client secret** instead
+and put them in `CLIENT_<STORE>`/`SECRET_<STORE>`; the API then mints its own 24-hour tokens
+(see **Expiring tokens** below). Store suffixes are in the table below.
 
 ## Setup & run
 
@@ -173,11 +175,13 @@ table below.
 # 1. Install Vercel CLI (only needed for local dev / deploy)
 npm i -g vercel
 
-# 2. Configure secrets: cp .env.example .env, then fill in the 17 keys
-#    (one SHOPIFY_API_VERSION + a token/domain pair per store)
+# 2. Configure secrets: cp .env.example .env, then fill it in — one
+#    SHOPIFY_API_VERSION, a DOMAIN_ per store, plus TOKEN_IORASG and a
+#    CLIENT_/SECRET_ pair for the seven stores with expiring tokens
 
-# 3. Check the token authenticates
-npm run verify-token
+# 3. Check the credentials authenticate (mints a token where needed)
+npm run verify-token                 # iORA SG
+node scripts/verify-token.js TRTSG   # any other store
 
 # 4. Run the unit tests (no token needed)
 npm test
@@ -200,16 +204,19 @@ domain. Set these under **Project → Settings → Environment Variables** on Ve
 | Variable | Store | Brand key |
 | --- | --- | --- |
 | `SHOPIFY_API_VERSION` | shared by all stores (`2025-10`) | — |
-| `TOKEN_IORASG` / `DOMAIN_IORASG` | iORA SG | `SG` |
-| `TOKEN_IORAMY` / `DOMAIN_IORAMY` | iORA MY | `MY` |
-| `TOKEN_TRTSG` / `DOMAIN_TRTSG` | The Restyle Trait SG | `TRTSG` |
-| `TOKEN_TRTMY` / `DOMAIN_TRTMY` | The Restyle Trait MY | `TRTMY` |
-| `TOKEN_SANSSG` / `DOMAIN_SANSSG` | SANS & SANS SG | `SANSSG` |
-| `TOKEN_SANSMY` / `DOMAIN_SANSMY` | SANS & SANS MY | `SANSMY` |
-| `TOKEN_MONOSG` / `DOMAIN_MONOSG` | MONOLOQ SG | `MONOSG` |
-| `TOKEN_MONOMY` / `DOMAIN_MONOMY` | MONOLOQ MY | `MONOMY` |
+| `TOKEN_IORASG` / `DOMAIN_IORASG` | iORA SG (permanent token) | `SG` |
+| `CLIENT_IORAMY` / `SECRET_IORAMY` / `DOMAIN_IORAMY` | iORA MY | `MY` |
+| `CLIENT_TRTSG` / `SECRET_TRTSG` / `DOMAIN_TRTSG` | The Restyle Trait SG | `TRTSG` |
+| `CLIENT_TRTMY` / `SECRET_TRTMY` / `DOMAIN_TRTMY` | The Restyle Trait MY | `TRTMY` |
+| `CLIENT_SANSSG` / `SECRET_SANSSG` / `DOMAIN_SANSSG` | SANS & SANS SG | `SANSSG` |
+| `CLIENT_SANSMY` / `SECRET_SANSMY` / `DOMAIN_SANSMY` | SANS & SANS MY | `SANSMY` |
+| `CLIENT_MONOSG` / `SECRET_MONOSG` / `DOMAIN_MONOSG` | MONOLOQ SG | `MONOSG` |
+| `CLIENT_MONOMY` / `SECRET_MONOMY` / `DOMAIN_MONOMY` | MONOLOQ MY | `MONOMY` |
 
-Resolved by `getConfig()` in `api/_shopify.js`. Notes:
+Every store also still accepts a plain `TOKEN_<STORE>`, which takes precedence over its
+`CLIENT_`/`SECRET_` pair (see **Expiring tokens** below).
+
+Resolved by `resolveConfig()` in `api/_shopify.js`. Notes:
 
 - The **brand key** is the dashboard's internal id (`/api/dashboard?brand=SG`). It matches
   the env suffix for every store except the two iORA ones: brand `SG` → `TOKEN_IORASG`,
@@ -230,7 +237,52 @@ Resolved by `getConfig()` in `api/_shopify.js`. Notes:
   `SHOPIFY_TOKEN_<BRAND>` + `SHOPIFY_DOMAIN_<BRAND>`/`SHOPIFY_STORE_DOMAIN_<BRAND>` for the
   rest. A single store can override the shared version with `SHOPIFY_API_VERSION_<BRAND>`.
 
-**Never commit `.env`** (it is gitignored).
+**Never commit `.env`** (it is gitignored, as is `oauth/`).
+
+### Expiring tokens: the API mints its own
+
+Only **iORA SG**'s app issues a permanent `shpat_` token. The other seven stores' apps issue
+tokens that **expire after ~24 hours**, which used to mean re-running `oauth/main.py` and
+re-uploading eight variables to Vercel every day.
+
+That is no longer necessary. `api/_token.js` performs the same OAuth **client_credentials**
+exchange the script did, inside the serverless function, at request time:
+
+```
+POST https://<shop>.myshopify.com/admin/oauth/access_token
+     grant_type=client_credentials&client_id=<CLIENT_…>&client_secret=<SECRET_…>
+  → { access_token: "shpat_…", expires_in: 86399 }
+```
+
+The `client_id` / `client_secret` pair **never expires**, so those are the only credentials
+Vercel holds. Behaviour:
+
+- **Precedence** — `TOKEN_<STORE>` set → used verbatim (iORA SG). Otherwise, if
+  `CLIENT_<STORE>` + `SECRET_<STORE>` are set → a token is minted. Otherwise the store
+  reports `reason: "not-configured"` exactly as before.
+- **Caching** — a minted token is held in the lambda's module scope until 10 minutes before
+  its expiry, so a warm instance mints once (not once per request); concurrent requests for
+  the same store share a single in-flight mint. A cold start mints again — one extra ~200 ms
+  call. Vercel instances don't share memory, so if that volume ever matters, swap the `Map`
+  in `api/_token.js` for Vercel KV; nothing else changes.
+- **Mid-request expiry** — if Shopify answers `401` on a minted token (rotated credentials,
+  app reinstalled, or a long multi-year pull straddling the expiry), the query re-mints once
+  and retries automatically. `403` is left alone: that's a missing scope, which a new token
+  can't fix.
+- **Failure** — a rejected `client_id`/`secret` surfaces as `meta.reason: "auth"` with the
+  Shopify response in `meta.message`, not a 500.
+- **Naming** — the `<STORE>_CLIENT` / `<STORE>_SECRET` / `<STORE>_DOMAIN` spelling used by
+  `oauth/.env` is also accepted, so that file's contents can be pasted into Vercel unchanged.
+
+Check any store end to end (mints, then calls the Admin API):
+
+```bash
+npm run verify-token                 # iORA SG
+node scripts/verify-token.js TRTSG   # any other store
+```
+
+`oauth/main.py` is now redundant — kept only as a reference for the grant. It contains live
+client secrets, so `oauth/` is gitignored.
 
 ## Verification checklist
 

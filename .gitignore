@@ -2,6 +2,9 @@
 .env
 .env.local
 .env.*.local
+# The standalone token-refresh script and its client secrets. Superseded by
+# api/_token.js (the API now mints its own tokens), kept only for reference.
+oauth/
 
 # Vercel
 .vercel

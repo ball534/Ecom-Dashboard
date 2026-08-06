@@ -1,22 +1,37 @@
 // scripts/verify-token.js
-// Checks whether the configured Shopify token + domain authenticate.
-// Usage:  npm run verify-token
+// Checks whether a store's Shopify credentials authenticate. For a store with no
+// permanent TOKEN_ (everything except iORA SG), this also proves that minting a
+// short-lived token from CLIENT_/SECRET_ works — the same path the deployed API uses.
+//
+// Usage:  npm run verify-token            (iORA SG)
+//         node scripts/verify-token.js TRTSG
 //
 // Exit 0 = authenticated. Exit 1 = failed (prints why + how to fix).
 
 import { loadEnv } from "./_env.js";
-import { getConfig, envNames, verifyToken, ShopifyError } from "../api/_shopify.js";
+import { resolveConfig, envNames, envSuffix, verifyToken, ShopifyError } from "../api/_shopify.js";
 
 loadEnv();
-const cfg = getConfig();
+const brand = (process.argv[2] || "SG").toUpperCase();
+const cfg = await resolveConfig(process.env, brand);
 
 const mask = (t) => (t ? `${t.slice(0, 6)}…${t.slice(-4)} (len ${t.length})` : "(empty)");
 
 console.log("Shopify config:");
+console.log("  store  :", envSuffix(brand));
 console.log("  domain :", cfg.domain || "(not set)");
 console.log("  version:", cfg.version);
-console.log("  token  :", mask(cfg.token));
+console.log("  token  :", mask(cfg.token), cfg.minted ? "(minted just now via client_credentials)" : "");
 console.log("");
+
+if (cfg.tokenError) {
+  console.error(`❌ Could not mint an access token (reason: ${cfg.tokenError.reason})`);
+  console.error("   " + String(cfg.tokenError.message).slice(0, 500));
+  console.error("");
+  console.error(`→ Check CLIENT_${envSuffix(brand)} / SECRET_${envSuffix(brand)} and that the app`);
+  console.error("  is installed on that store with the client_credentials grant enabled.");
+  process.exit(1);
+}
 
 try {
   const shop = await verifyToken(cfg);

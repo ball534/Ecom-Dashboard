@@ -16,7 +16,14 @@
 // Targets come from lib/targets.js (local data, no Shopify) and are served even when
 // the brand has no Shopify credentials.
 
-import { getConfig, envNames, shopifyQL, fetchProductImagesByTitle, ShopifyError } from "./_shopify.js";
+import {
+  resolveConfig,
+  envNames,
+  envSuffix,
+  shopifyQL,
+  fetchProductImagesByTitle,
+  ShopifyError,
+} from "./_shopify.js";
 import {
   INSIGHT_QUERIES,
   SKU_PULL_LIMIT,
@@ -88,7 +95,8 @@ export default async function handler(req, res) {
   const today = todayInTZ(SHOP_TZ);
   const q = req.query || {};
   const brand = resolveBrand(q);
-  const cfg = getConfig(process.env, brand);
+  // Mints this store's short-lived token when it has no permanent TOKEN_ (api/_token.js).
+  const cfg = await resolveConfig(process.env, brand);
 
   let start = isDate(q.start) ? q.start : `${today.slice(0, 4)}-01-01`;
   let end = isDate(q.end) ? q.end : today;
@@ -119,7 +127,8 @@ export default async function handler(req, res) {
     targets,
   };
 
-  // A brand with no token/domain isn't an error — mirror api/dashboard.js exactly.
+  // A brand with no token/domain isn't an error — mirror api/dashboard.js exactly. A token
+  // that could not be minted (cfg.tokenError) is reported with its own reason/message.
   if (!cfg.token || !cfg.domain || cfg.domain === "your-store.myshopify.com") {
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
@@ -127,10 +136,12 @@ export default async function handler(req, res) {
       meta: {
         live: false,
         brand,
-        reason: "not-configured",
-        message:
-          `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).token} ` +
-          `and ${envNames(brand).domain} in the Vercel project's Environment Variables.`,
+        reason: cfg.tokenError ? cfg.tokenError.reason : "not-configured",
+        message: cfg.tokenError
+          ? String(cfg.tokenError.message).slice(0, 400)
+          : `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).domain} plus ` +
+            `either ${envNames(brand).token} or CLIENT_${envSuffix(brand)} + SECRET_${envSuffix(brand)} ` +
+            `in the Vercel project's Environment Variables.`,
         sections: metaSections,
       },
     });

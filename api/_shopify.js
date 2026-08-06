@@ -4,20 +4,16 @@
 // scripts/verify-token.js.
 
 import { normalizeOrder } from "../lib/aggregate.js";
+import { ShopifyError } from "./_error.js";
+import { getAccessToken, hasAppCredentials } from "./_token.js";
 
 // 2025-10 is the earliest Admin API version that exposes `shopifyqlQuery` (ShopifyQL).
 // Older versions (<=2025-07) lack the field; the dashboard then falls back to the
 // Orders-based reconstruction for sales (Sessions/Conversion show dashes).
 const DEFAULT_API_VERSION = "2025-10";
 
-export class ShopifyError extends Error {
-  constructor(reason, message, status) {
-    super(message || reason);
-    this.name = "ShopifyError";
-    this.reason = reason; // no-token | no-domain | auth | scope | throttle | http | graphql | timeout
-    this.status = status;
-  }
-}
+// Re-exported so every caller keeps importing the error type from this module.
+export { ShopifyError };
 
 // Multi-store: each brand button on the dashboard is backed by its own Shopify store, so
 // it needs its own Admin API token + permanent domain. Each store is one pair of env vars
@@ -77,6 +73,10 @@ export function getConfig(env = process.env, brand = "SG") {
       ? strip(env.SHOPIFY_STORE_DOMAIN)
       : strip(env["SHOPIFY_DOMAIN_" + B]) || strip(env["SHOPIFY_STORE_DOMAIN_" + B]);
   }
+  // <STORE>_DOMAIN is the spelling oauth/main.py's .env used, alongside <STORE>_CLIENT /
+  // <STORE>_SECRET. Accepting it means that block of credentials can be pasted into
+  // Vercel as-is (see api/_token.js).
+  if (!domain) domain = strip(env[S + "_DOMAIN"]);
 
   // Reduce a domain to a bare host first, so a pasted "https://<handle>.myshopify.com/admin"
   // is still recognised as a domain whichever variable it landed in.
@@ -97,6 +97,41 @@ export function getConfig(env = process.env, brand = "SG") {
   const version =
     strip(env["SHOPIFY_API_VERSION_" + B]) || strip(env.SHOPIFY_API_VERSION) || DEFAULT_API_VERSION;
   return { token, domain, version, brand: B };
+}
+
+// getConfig + "if this store has no permanent token, mint a short-lived one now".
+//
+// This is what every request path should use. It is what removes the 24-hour chore: only
+// iORA SG needs a TOKEN_ variable, and every other store is authenticated from its
+// permanent CLIENT_/SECRET_ pair via the client_credentials grant (api/_token.js).
+//
+// It never throws. A minting failure comes back as `cfg.tokenError` with `cfg.token`
+// empty, so the endpoints report it the same way they already report a store that isn't
+// wired up — a diagnosable 200, not a 500.
+//
+// The returned cfg also carries `refresh()`, used by shopifyGraphQL to re-mint once if a
+// token is rejected mid-flight (see below).
+export async function resolveConfig(env = process.env, brand = "SG") {
+  const cfg = getConfig(env, brand);
+  const S = envSuffix(brand);
+
+  // A permanent token (iORA SG) always wins, and with no domain there is nothing to
+  // authenticate against — both fall through to the caller's "not configured" handling.
+  if (cfg.token || !cfg.domain) return cfg;
+  if (!hasAppCredentials(env, S)) return cfg;
+
+  cfg.minted = true;
+  cfg.refresh = async () => {
+    cfg.token = await getAccessToken(env, S, cfg.domain, { force: true, stale: cfg.token });
+    return cfg.token;
+  };
+  try {
+    cfg.token = await getAccessToken(env, S, cfg.domain);
+  } catch (e) {
+    cfg.token = "";
+    cfg.tokenError = e;
+  }
+  return cfg;
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -129,6 +164,20 @@ export async function shopifyGraphQL(cfg, query, variables = {}, _attempt = 0) {
     throw new ShopifyError("http", `Network error reaching Shopify: ${e.message}`);
   }
 
+  // A minted token can stop working before its nominal expiry — the app is reinstalled,
+  // its credentials are rotated, or (a full year-scale pull runs for tens of seconds) it
+  // simply lapses mid-request. Mint a replacement and retry the query once; `refresh()`
+  // de-duplicates so parallel queries on the same cfg share one new token. 403 is left
+  // alone deliberately: that is a missing scope, which a fresh token cannot fix.
+  if (res.status === 401 && typeof cfg.refresh === "function" && !cfg.reauthTried) {
+    cfg.reauthTried = true;
+    try {
+      await cfg.refresh();
+      return shopifyGraphQL(cfg, query, variables, _attempt);
+    } catch {
+      // Fall through to the auth error below — re-minting failed too.
+    }
+  }
   if (res.status === 401 || res.status === 403) {
     throw new ShopifyError("auth", `Shopify rejected the token (HTTP ${res.status}). The token may be invalid or not a Shopify Admin token.`, res.status);
   }

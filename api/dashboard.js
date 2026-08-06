@@ -18,8 +18,9 @@
 //     has no clean column for this).
 
 import {
-  getConfig,
+  resolveConfig,
   envNames,
+  envSuffix,
   fetchOrders,
   fetchVariantCompareAt,
   shopifyQL,
@@ -90,12 +91,15 @@ export default async function handler(req, res) {
   const today = todayInTZ(SHOP_TZ);
   const q = req.query || {};
   const brand = resolveBrand(q);
-  const cfg = getConfig(process.env, brand);
+  // Resolves the store's domain + token, minting a short-lived token from its permanent
+  // CLIENT_/SECRET_ pair when the store has no TOKEN_ of its own (api/_token.js).
+  const cfg = await resolveConfig(process.env, brand);
 
   // A brand with no token/domain configured isn't an error — it just isn't wired up yet.
   // Report it plainly (200 + reason) so the front-end skips that store quietly, leaving
   // its figures blank, instead of showing a failure. Distinct from a real credential
-  // problem, which throws below and IS surfaced as a warning.
+  // problem, which throws below and IS surfaced as a warning — as is a token that could
+  // not be minted (cfg.tokenError), which is a live credentials fault, not a gap.
   if (!cfg.token || !cfg.domain || cfg.domain === "your-store.myshopify.com") {
     res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({
@@ -103,10 +107,12 @@ export default async function handler(req, res) {
       meta: {
         live: false,
         brand,
-        reason: "not-configured",
-        message:
-          `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).token} ` +
-          `and ${envNames(brand).domain} in the Vercel project's Environment Variables.`,
+        reason: cfg.tokenError ? cfg.tokenError.reason : "not-configured",
+        message: cfg.tokenError
+          ? String(cfg.tokenError.message).slice(0, 400)
+          : `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).domain} plus ` +
+            `either ${envNames(brand).token} or CLIENT_${envSuffix(brand)} + SECRET_${envSuffix(brand)} ` +
+            `in the Vercel project's Environment Variables.`,
       },
     });
   }

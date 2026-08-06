@@ -5,12 +5,12 @@
 // from the Orders API. Usage: npm run preview [year]
 
 import { loadEnv } from "./_env.js";
-import { getConfig, fetchOrders, shopifyQL, ShopifyError } from "../api/_shopify.js";
+import { resolveConfig, fetchOrders, shopifyQL, ShopifyError } from "../api/_shopify.js";
 import { bucketOrders, monthsWithData } from "../lib/aggregate.js";
 import { buildSalesQL, buildSessionsQL, bucketSales, bucketSessions } from "../lib/shopifyql.js";
 
 loadEnv();
-const cfg = getConfig();
+const cfg = await resolveConfig();
 const YEAR = Number(process.argv[2] || new Date().getFullYear());
 const TZ = "Asia/Singapore";
 const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];

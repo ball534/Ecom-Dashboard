@@ -12,7 +12,7 @@
 //   (feeds the future product_type merge decision).
 
 import { loadEnv } from "./_env.js";
-import { getConfig, envNames, shopifyQL, ShopifyError } from "../api/_shopify.js";
+import { resolveConfig, envNames, envSuffix, shopifyQL, ShopifyError } from "../api/_shopify.js";
 import {
   INSIGHT_QUERIES,
   SKU_PULL_LIMIT,
@@ -41,9 +41,14 @@ const start = args[1] || `${year}-01-01`;
 const end = args[2] || new Date().toISOString().slice(0, 10);
 const LIMIT = 10;
 
-const cfg = getConfig(process.env, brand);
+const cfg = await resolveConfig(process.env, brand);
+if (cfg.tokenError) {
+  console.log(`Brand ${brand}: could not mint an access token — ${cfg.tokenError.message}`);
+  process.exit(1);
+}
 if (!cfg.token || !cfg.domain) {
-  console.log(`Brand ${brand} is not configured (no token/domain). Set ${envNames(brand).token} / ${envNames(brand).domain}.`);
+  console.log(`Brand ${brand} is not configured. Set ${envNames(brand).domain} plus either ` +
+    `${envNames(brand).token} or CLIENT_${envSuffix(brand)} / SECRET_${envSuffix(brand)}.`);
   process.exit(1);
 }
 

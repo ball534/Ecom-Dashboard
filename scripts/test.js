@@ -41,7 +41,8 @@ import {
 } from "../lib/insights.js";
 import { CATEGORY_MAP } from "../lib/category-map.js";
 import { TARGETS, validateTargets, getTargets } from "../lib/targets.js";
-import { getConfig, envNames } from "../api/_shopify.js";
+import { getConfig, envNames, resolveConfig } from "../api/_shopify.js";
+import { clearTokenCache, getAppCredentials } from "../api/_token.js";
 
 let passed = 0;
 const tests = [];
@@ -557,11 +558,131 @@ test("getConfig corrects a transposed TOKEN_/DOMAIN_ pair instead of failing as 
   assert.equal(half.domain, "");
 });
 
+// ---- minted tokens (resolveConfig + api/_token.js) ----
+
+// Stand in for the OAuth token endpoint. Returns a distinct token per call so the tests
+// can tell a cache hit from a fresh mint.
+function stubTokenEndpoint({ status = 200, expiresIn = 86399 } = {}) {
+  const real = globalThis.fetch;
+  const calls = [];
+  let n = 0;
+  globalThis.fetch = async (url, init) => {
+    calls.push({ url: String(url), body: String(init?.body || "") });
+    if (status !== 200) {
+      return { ok: false, status, text: async () => "bad credentials" };
+    }
+    n += 1;
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ access_token: `shpat_minted_${n}`, expires_in: expiresIn }),
+    };
+  };
+  return { calls, restore: () => { globalThis.fetch = real; } };
+}
+
+test("app credentials are read under both CLIENT_<S>/SECRET_<S> and <S>_CLIENT/<S>_SECRET", () => {
+  assert.deepEqual(getAppCredentials({ CLIENT_TRTSG: "id-a", SECRET_TRTSG: "shpss_a" }, "TRTSG"), {
+    clientId: "id-a",
+    clientSecret: "shpss_a",
+  });
+  // The spelling oauth/main.py's .env used, so it can be pasted into Vercel unchanged.
+  assert.deepEqual(getAppCredentials({ TRTSG_CLIENT: "id-b", TRTSG_SECRET: "shpss_b" }, "TRTSG"), {
+    clientId: "id-b",
+    clientSecret: "shpss_b",
+  });
+});
+
+test("resolveConfig mints a token from CLIENT_/SECRET_ and caches it across calls", async () => {
+  clearTokenCache();
+  const stub = stubTokenEndpoint();
+  try {
+    const env = {
+      DOMAIN_TRTSG: "trt-sg.myshopify.com",
+      CLIENT_TRTSG: "client-id",
+      SECRET_TRTSG: "shpss_secret",
+    };
+    const cfg = await resolveConfig(env, "TRTSG");
+    assert.equal(cfg.token, "shpat_minted_1");
+    assert.equal(cfg.minted, true);
+    assert.ok(!cfg.tokenError);
+    assert.equal(stub.calls.length, 1);
+    assert.equal(stub.calls[0].url, "https://trt-sg.myshopify.com/admin/oauth/access_token");
+    assert.match(stub.calls[0].body, /grant_type=client_credentials/);
+
+    // A second request in the same (warm) process reuses the cached token — no second mint.
+    const again = await resolveConfig(env, "TRTSG");
+    assert.equal(again.token, "shpat_minted_1");
+    assert.equal(stub.calls.length, 1);
+
+    // refresh() forces a new one, e.g. after Shopify rejects the cached token with a 401.
+    await again.refresh();
+    assert.equal(again.token, "shpat_minted_2");
+    assert.equal(stub.calls.length, 2);
+  } finally {
+    stub.restore();
+    clearTokenCache();
+  }
+});
+
+test("resolveConfig keeps a permanent TOKEN_ and never calls the token endpoint", async () => {
+  clearTokenCache();
+  const stub = stubTokenEndpoint();
+  try {
+    const cfg = await resolveConfig(
+      {
+        DOMAIN_IORASG: "iora-online.myshopify.com",
+        TOKEN_IORASG: "shpat_" + "d".repeat(32),
+        CLIENT_IORASG: "ignored",
+        SECRET_IORASG: "ignored",
+      },
+      "SG",
+    );
+    assert.equal(cfg.token, "shpat_" + "d".repeat(32));
+    assert.ok(!cfg.minted);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    stub.restore();
+    clearTokenCache();
+  }
+});
+
+test("a failed mint yields cfg.tokenError instead of throwing, and never claims a token", async () => {
+  clearTokenCache();
+  const stub = stubTokenEndpoint({ status: 401 });
+  try {
+    const cfg = await resolveConfig(
+      { DOMAIN_MONOMY: "monoloq-my.myshopify.com", CLIENT_MONOMY: "bad", SECRET_MONOMY: "bad" },
+      "MONOMY",
+    );
+    assert.equal(cfg.token, "");
+    assert.equal(cfg.tokenError.reason, "auth");
+    assert.match(cfg.tokenError.message, /monoloq-my\.myshopify\.com/);
+  } finally {
+    stub.restore();
+    clearTokenCache();
+  }
+});
+
+test("a store with neither a token nor app credentials stays unconfigured (no mint attempt)", async () => {
+  clearTokenCache();
+  const stub = stubTokenEndpoint();
+  try {
+    const cfg = await resolveConfig({ DOMAIN_SANSMY: "sansandsans-my.myshopify.com" }, "SANSMY");
+    assert.equal(cfg.token, "");
+    assert.ok(!cfg.tokenError);
+    assert.equal(stub.calls.length, 0);
+  } finally {
+    stub.restore();
+    clearTokenCache();
+  }
+});
+
 // ---- runner ----
 let failed = 0;
 for (const t of tests) {
   try {
-    t.fn();
+    await t.fn();
     passed += 1;
     console.log(`  ✓ ${t.name}`);
   } catch (e) {

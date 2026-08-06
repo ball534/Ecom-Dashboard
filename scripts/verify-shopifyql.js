@@ -7,10 +7,10 @@
 // Exit 0 = at least one API version returned data. Exit 1 = none did.
 
 import { loadEnv } from "./_env.js";
-import { getConfig, shopifyQL, ShopifyError } from "../api/_shopify.js";
+import { resolveConfig, shopifyQL, ShopifyError } from "../api/_shopify.js";
 
 loadEnv();
-const base = getConfig();
+const base = await resolveConfig();
 const YEAR = Number(process.argv[2] || new Date().getFullYear());
 const start = `${YEAR}-01-01`;
 const end = `${YEAR}-12-31`;
