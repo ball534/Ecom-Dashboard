@@ -13,6 +13,7 @@ import {
   mergeYearArray,
   computeAggregate,
   monthsWithData,
+  buildFulfillmentSection,
 } from "../lib/aggregate.js";
 import {
   buildSalesQL,
@@ -36,10 +37,11 @@ import {
   parseReferrers,
   parseOrderReferrers,
   parseCampaigns,
-  categorizeSku,
-  buildCategoryMix,
+  parseCategoryMix,
+  parseDiscountTerms,
+  buildProductTypeSalesQL,
+  PRODUCT_TYPE_LIMIT,
 } from "../lib/insights.js";
-import { CATEGORY_MAP } from "../lib/category-map.js";
 import { TARGETS, validateTargets, getTargets } from "../lib/targets.js";
 import { getConfig, envNames, resolveConfig } from "../api/_shopify.js";
 import { clearTokenCache, getAppCredentials } from "../api/_token.js";
@@ -204,6 +206,75 @@ test("normalizeOrder flags test + cancelled orders", () => {
   const c = normalizeOrder({ createdAt: "2026-01-01T03:00:00Z", cancelledAt: "2026-01-02T00:00:00Z" });
   assert.equal(t.test, true);
   assert.equal(c.cancelled, true);
+});
+
+// The pickup-vs-delivery split is served from its own cheap pull
+// (FULFILLMENT_ORDERS_QUERY: shippingLine.title, shippingAddress.zip, cancelledAt,
+// test) instead of riding the full line-item pull. These two tests are the guarantee
+// that the change is a speed change and not a numbers change.
+const fcfFull = [
+  // pickup — shippingAddress is the customer's HOME, must NOT count as a delivery region
+  { createdAt: "2026-01-05T02:00:00Z", test: false, cancelledAt: null,
+    shippingLine: { title: "Pick Up @ Jurong Point (1 Jurong West Central 2)" },
+    shippingAddress: { zip: "640501" } },
+  { createdAt: "2026-01-06T02:00:00Z", test: false, cancelledAt: null,
+    shippingLine: { title: "Standard Delivery" }, shippingAddress: { zip: "238801" } },
+  { createdAt: "2026-01-07T02:00:00Z", test: false, cancelledAt: null,
+    shippingLine: { title: "Free Shipping" }, shippingAddress: { zip: "238123" } },
+  // cancelled — excluded, so the split ties to the ShopifyQL Orders KPI beside it
+  { createdAt: "2026-01-08T02:00:00Z", test: false, cancelledAt: "2026-01-09T02:00:00Z",
+    shippingLine: { title: "Standard Delivery" }, shippingAddress: { zip: "099999" } },
+  { createdAt: "2026-01-09T02:00:00Z", test: false, cancelledAt: null,
+    shippingLine: { title: "Pick Up @ Jurong Point (1 Jurong West Central 2)" },
+    shippingAddress: { zip: "640502" } },
+].map((n) => ({
+  // everything ORDERS_QUERY adds and FULFILLMENT_ORDERS_QUERY omits
+  ...n,
+  taxesIncluded: true,
+  paymentGatewayNames: ["shopify_payments"],
+  customer: { id: "C1", numberOfOrders: 3 },
+  lineItems: { edges: [{ node: {
+    quantity: 2, sku: "AF1234", variant: { id: "gid://shopify/ProductVariant/1" },
+    originalTotalSet: { shopMoney: { amount: "100" } },
+    taxLines: [{ rate: 0.09 }], discountAllocations: [],
+  } }] },
+}));
+
+test("buildFulfillmentSection: pickup/delivery counts, pickup points, delivery districts", () => {
+  const s = buildFulfillmentSection(fcfFull.map(normalizeOrder));
+  assert.equal(s.pickup, 2);
+  assert.equal(s.delivery, 2); // the cancelled one is excluded
+  assert.deepEqual(s.points, [["Jurong Point", 2]]); // "(address)" suffix stripped
+  assert.deepEqual(s.regions, [["District 23", 2]]); // pickup home zips never counted
+});
+
+test("fulfillment split is IDENTICAL from the cheap pull and the full line-item pull", () => {
+  // Exactly the fields FULFILLMENT_ORDERS_QUERY requests — no line items, no money,
+  // no customer block. If this ever diverges, the cheap pull is changing the numbers.
+  const minimal = fcfFull.map((n) => ({
+    createdAt: n.createdAt,
+    test: n.test,
+    cancelledAt: n.cancelledAt,
+    shippingLine: n.shippingLine,
+    shippingAddress: n.shippingAddress,
+  }));
+  assert.deepEqual(
+    buildFulfillmentSection(minimal.map(normalizeOrder)),
+    buildFulfillmentSection(fcfFull.map(normalizeOrder)),
+  );
+});
+
+test("fulfillment split without shippingAddress keeps the pickup split, drops regions", () => {
+  // The scope-denial fallback: shippingAddress.zip is protected on some tokens.
+  const noAddr = fcfFull.map((n) => ({
+    createdAt: n.createdAt, test: n.test, cancelledAt: n.cancelledAt,
+    shippingLine: n.shippingLine,
+  }));
+  const s = buildFulfillmentSection(noAddr.map(normalizeOrder));
+  assert.equal(s.pickup, 2);
+  assert.equal(s.delivery, 2);
+  assert.deepEqual(s.points, [["Jurong Point", 2]]);
+  assert.deepEqual(s.regions, []);
 });
 
 test("monthIndexInTZ respects Asia/Singapore offset (month rollover)", () => {
@@ -402,7 +473,8 @@ test("insight builders emit the expected ShopifyQL", () => {
   assert.ok(/^FROM sales SHOW quantity_ordered, gross_sales, net_sales, orders GROUP BY product_variant_sku/.test(sku));
   assert.ok(sku.includes(`ORDER BY quantity_ordered DESC LIMIT ${SKU_PULL_LIMIT} SINCE 2026-06-01 UNTIL 2026-06-30`));
   const title = buildTitleSalesQL("2026-06-01", "2026-06-30", 10);
-  assert.ok(/GROUP BY product_title ORDER BY quantity_ordered DESC LIMIT 10/.test(title));
+  // grouped by product_type too, so the by-category panel uses Shopify's own category
+  assert.ok(/GROUP BY product_title, product_type ORDER BY quantity_ordered DESC LIMIT 10/.test(title));
   assert.ok(/^FROM sales SHOW discounts, orders, gross_sales GROUP BY discount_code SINCE 2026-06-01 UNTIL 2026-06-30$/.test(buildDiscountCodesQL("2026-06-01", "2026-06-30")));
   assert.ok(/^FROM sessions SHOW sessions GROUP BY referrer_source SINCE /.test(buildReferrersQL("2026-06-01", "2026-06-30")));
   assert.ok(/^FROM sales SHOW orders, total_sales GROUP BY order_referrer_source SINCE /.test(buildOrderReferrersQL("2026-06-01", "2026-06-30")));
@@ -422,8 +494,11 @@ test("parseTopSkus parses strings, rounds money, drops null skus, respects limit
   assert.equal(top[1].sku, "AFBS0001-BLK-M");
   assert.equal(top[1].gross, 133.03); // round2
   assert.equal(top[0].qty, 20);
-  const titles = parseTopTitles([{ product_title: "Knit Top", quantity_ordered: "91", gross_sales: "1726.72", net_sales: "1700", orders: "38" }], 5);
-  assert.deepEqual(titles, [{ title: "Knit Top", qty: 91, gross: 1726.72, net: 1700, orders: 38 }]);
+  const titles = parseTopTitles([{ product_title: "Knit Top", product_type: "Knitwear", quantity_ordered: "91", gross_sales: "1726.72", net_sales: "1700", orders: "38" }], 5);
+  assert.deepEqual(titles, [{ title: "Knit Top", qty: 91, gross: 1726.72, net: 1700, orders: 38, type: "Knitwear" }]);
+  // a blank product_type stays null — the panel says so rather than inventing a category
+  const untyped = parseTopTitles([{ product_title: "Mystery Item", product_type: "", quantity_ordered: "3", gross_sales: "30", net_sales: "30", orders: "3" }], 5);
+  assert.equal(untyped[0].type, null);
 });
 
 test("parseDiscountCodes: null code → noCode, discounts flipped positive, sorted, tail folds into others", () => {
@@ -468,41 +543,81 @@ test("traffic parsers: sort desc, preserve null referrer, drop null campaigns, r
   assert.deepEqual(camps, [{ campaign: "A", sessions: 15079 }]); // nulls dropped, limit applied
 });
 
-test("categorizeSku: longest prefix wins, case-insensitive, override beats prefix, unknown/null → fallback", () => {
-  const map = {
-    prefixes: { AFB: "Generic A", AFBS: "Blouses" },
-    overrides: { "afbs0001-blk-m": "Special" },
-    fallback: "Other",
-  };
-  assert.equal(categorizeSku("AFBS0002", map), "Blouses"); // longest prefix wins over AFB
-  assert.equal(categorizeSku("AFBX0002", map), "Generic A"); // falls back to shorter prefix
-  assert.equal(categorizeSku("afbs0002", map), "Blouses"); // case-insensitive
-  assert.equal(categorizeSku("AFBS0001-BLK-M", map), "Special"); // override wins
-  assert.equal(categorizeSku("ZZXX1234", map), "Other");
-  assert.equal(categorizeSku(null, map), "Other");
-  assert.equal(categorizeSku("", map), "Other");
-});
-
-test("buildCategoryMix aggregates, shares sum to 1, unmapped prefixes reported", () => {
-  const map = { prefixes: { AFBS: "Blouses" }, overrides: {}, fallback: "Other" };
+test("parseCategoryMix uses Shopify's product_type and never invents a category", () => {
   const rows = [
-    { product_variant_sku: "AFBS0001", quantity_ordered: "10", gross_sales: "100" },
-    { product_variant_sku: "AFBS0002", quantity_ordered: "5", gross_sales: "50" },
-    { product_variant_sku: "ZZXX9999", quantity_ordered: "2", gross_sales: "50" },
+    { product_type: "Blouses", quantity_ordered: "10", gross_sales: "100", orders: "8" },
+    { product_type: "Blouses", quantity_ordered: "5", gross_sales: "50", orders: "4" },
+    { product_type: "Dresses", quantity_ordered: "2", gross_sales: "50", orders: "2" },
+    // blank product_type: counted as unclassified, NOT folded into an "Other" category
+    { product_type: null, quantity_ordered: "7", gross_sales: "70", orders: "6" },
   ];
-  const mix = buildCategoryMix(rows, map);
+  const mix = parseCategoryMix(rows);
+  assert.equal(mix.rows.length, 2); // the blank row did not become a category
   assert.equal(mix.rows[0].category, "Blouses");
   assert.equal(mix.rows[0].gross, 150);
   assert.equal(mix.rows[0].qty, 15);
-  assert.equal(mix.rows[0].share, 0.75);
-  assert.equal(mix.rows[1].category, "Other");
-  assert.equal(mix.rows[1].share, 0.25);
+  assert.equal(mix.rows[0].share, 0.75); // share is of CLASSIFIED sales
+  assert.equal(mix.rows[1].category, "Dresses");
   const shareSum = mix.rows.reduce((t, r) => t + r.share, 0);
   assert.ok(Math.abs(shareSum - 1) < 1e-9);
-  assert.equal(mix.unmapped.length, 1);
-  assert.equal(mix.unmapped[0].prefix, "ZZXX");
-  assert.equal(mix.unmapped[0].gross, 50);
-  assert.equal(mix.truncated, false);
+  assert.equal(mix.unclassified.gross, 70);
+  assert.equal(mix.unclassified.qty, 7);
+});
+
+test("parseCategoryMix returns null when Shopify has no product_type at all", () => {
+  // The honest outcome: an empty state, not a mix derived from SKU naming.
+  assert.equal(parseCategoryMix([{ product_type: null, gross_sales: "100", quantity_ordered: "4" }]), null);
+  assert.equal(parseCategoryMix([]), null);
+});
+
+test("buildProductTypeSalesQL groups by product_type over the window", () => {
+  const q = buildProductTypeSalesQL("2026-01-01", "2026-06-30");
+  assert.ok(/^FROM sales SHOW gross_sales, quantity_ordered, orders GROUP BY product_type/.test(q));
+  assert.ok(q.includes(`LIMIT ${PRODUCT_TYPE_LIMIT} SINCE 2026-01-01 UNTIL 2026-06-30`));
+});
+
+// ---- Discount terms (live, from codeDiscountNodeByCode) ----
+
+test("parseDiscountTerms reads the merchant's configured terms, inventing nothing", () => {
+  const t = parseDiscountTerms({
+    "12OFF80": {
+      __typename: "DiscountCodeBasic",
+      title: "12 off 80", status: "ACTIVE", startsAt: "2026-06-01T00:00:00Z", endsAt: null,
+      usageLimit: 500, appliesOncePerCustomer: true,
+      customerGets: { value: { __typename: "DiscountAmount", amount: { amount: "12.0", currencyCode: "SGD" }, appliesOnEachItem: false } },
+      minimumRequirement: { __typename: "DiscountMinimumSubtotal", greaterThanOrEqualToSubtotal: { amount: "80.0", currencyCode: "SGD" } },
+    },
+    SAVE20: {
+      __typename: "DiscountCodeBasic",
+      title: "Save 20", status: "EXPIRED", usageLimit: null, appliesOncePerCustomer: false,
+      customerGets: { value: { __typename: "DiscountPercentage", percentage: 0.2 } },
+      minimumRequirement: { __typename: "DiscountMinimumQuantity", greaterThanOrEqualToQuantity: "2" },
+    },
+    FREESHIP: { __typename: "DiscountCodeFreeShipping", title: "Free shipping", status: "ACTIVE" },
+  });
+
+  assert.equal(t["12OFF80"].kind, "basic");
+  assert.equal(t["12OFF80"].amount, 12);
+  assert.equal(t["12OFF80"].currencyCode, "SGD");
+  assert.equal(t["12OFF80"].minSubtotal, 80);
+  assert.equal(t["12OFF80"].usageLimit, 500);
+  assert.equal(t["12OFF80"].oncePerCustomer, true);
+  assert.equal(t["12OFF80"].percentage, null);
+
+  assert.equal(t.SAVE20.percentage, 20); // 0-1 fraction served as 0-100
+  assert.equal(t.SAVE20.minQuantity, 2);
+  assert.equal(t.SAVE20.minSubtotal, null);
+  assert.equal(t.SAVE20.status, "EXPIRED");
+
+  assert.equal(t.FREESHIP.kind, "freeShipping");
+  assert.equal(t.FREESHIP.amount, null); // nothing fabricated for the missing fields
+  assert.equal(t.FREESHIP.minSubtotal, null);
+});
+
+test("parseDiscountTerms: a code Shopify doesn't know contributes no entry", () => {
+  assert.deepEqual(parseDiscountTerms({ GONE: null }), {});
+  assert.deepEqual(parseDiscountTerms({}), {});
+  assert.deepEqual(parseDiscountTerms(null), {});
 });
 
 // ---- Targets (lib/targets.js) ----
@@ -526,17 +641,8 @@ test("getTargets returns {year:[12]} copies for requested years only; null when 
   assert.equal(data.SG[2025][0], 1000); // copies, not references
 });
 
-test("the real checked-in CATEGORY_MAP and TARGETS pass validation", () => {
+test("the real checked-in TARGETS pass validation", () => {
   assert.equal(validateTargets(TARGETS), true);
-  assert.equal(typeof CATEGORY_MAP.fallback, "string");
-  assert.ok(CATEGORY_MAP.fallback.length > 0);
-  const seen = new Set();
-  for (const [prefix, cat] of Object.entries(CATEGORY_MAP.prefixes)) {
-    assert.ok(typeof cat === "string" && cat.length > 0, `prefix ${prefix} has an empty category`);
-    const up = prefix.toUpperCase();
-    assert.ok(!seen.has(up), `case-duplicate prefix key: ${prefix}`);
-    seen.add(up);
-  }
 });
 
 // ---- store credentials (getConfig) ----

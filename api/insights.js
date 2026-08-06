@@ -9,10 +9,22 @@
 //
 // Query params (optional):
 //   ?brand=SG&start=YYYY-MM-DD&end=YYYY-MM-DD&limit=10   — limit clamped 1..50
+//   ?only=<keys>    — run ONLY these INSIGHT_QUERIES keys (comma-separated)
+//   ?except=<keys>  — run everything EXCEPT these keys
 //
-// Every response is HTTP 200. Sections are BEST-EFFORT and independent: the ten
-// ShopifyQL calls run through a width-2 pool (allSettled-shaped) and a failed call yields
+// `only`/`except` exist so the front-end can PARTITION the ten queries across two
+// parallel requests instead of waiting on one serialized pool. The Promotions tab needs
+// two of the ten (discountCodes + discountMonthly), and discountMonthly is last in the
+// pool — so the tab used to wait through all five rounds AND the best-seller image
+// lookup for data that was ready in round one. Partitioned, each half is a separate
+// invocation with its own budget. Front-end callers must keep the two sets disjoint so
+// no query is paid for twice.
+//
+// Every response is HTTP 200. Sections are BEST-EFFORT and independent: the ShopifyQL
+// calls run through a width-2 pool (allSettled-shaped) and a failed call yields
 // sections.<x> = null plus a reason in meta.sections.<key> — the payload never 500s.
+// A section whose query was not part of THIS request is also null, so a caller merging
+// two partitioned payloads must treat null as "not supplied", never as "empty".
 // Targets come from lib/targets.js (local data, no Shopify) and are served even when
 // the brand has no Shopify credentials.
 
@@ -22,11 +34,12 @@ import {
   envSuffix,
   shopifyQL,
   fetchProductImagesByTitle,
+  fetchDiscountTerms,
   ShopifyError,
 } from "./_shopify.js";
 import {
   INSIGHT_QUERIES,
-  SKU_PULL_LIMIT,
+  PRODUCT_TYPE_LIMIT,
   parseTopSkus,
   parseTopTitles,
   parseDiscountCodes,
@@ -37,10 +50,10 @@ import {
   parseFunnel,
   parseTrafficMonthly,
   parseLandingPages,
+  parseDiscountTerms,
   buildVoucherReport,
-  buildCategoryMix,
+  parseCategoryMix,
 } from "../lib/insights.js";
-import { CATEGORY_MAP } from "../lib/category-map.js";
 import { TARGETS, getTargets } from "../lib/targets.js";
 
 const SHOP_TZ = "Asia/Singapore";
@@ -103,18 +116,35 @@ export default async function handler(req, res) {
   if (start > end) [start, end] = [end, start];
   const limit = Math.min(50, Math.max(1, Number(q.limit) || 10));
 
+  // Which of the ten queries this request runs. Unknown keys are ignored; a filter that
+  // matches nothing runs nothing (and says so) rather than silently falling back to the
+  // full — expensive — set.
+  const keyList = (v) =>
+    String(v || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const onlyKeys = keyList(q.only);
+  const exceptKeys = keyList(q.except);
+  const queries = INSIGHT_QUERIES.filter(
+    (spec) =>
+      (!onlyKeys.length || onlyKeys.includes(spec.key)) && !exceptKeys.includes(spec.key),
+  );
+
   const years = [];
   for (let y = Number(start.slice(0, 4)); y <= Number(end.slice(0, 4)); y++) years.push(y);
 
   // Targets are local data — resolved regardless of Shopify credentials. A malformed
   // hand-edit of lib/targets.js degrades to a per-section error, never a 500.
+  // A partitioned request serves targets only when it asked for them, so the two halves
+  // don't both claim the same section (harmless but misleading in meta).
+  const wantTargets = !onlyKeys.length || onlyKeys.includes("targets");
   let targets = null;
   const metaSections = {};
-  try {
-    targets = getTargets(TARGETS, brand, years);
-    metaSections.targets = targets ? { ok: true } : { ok: false, reason: "no-targets" };
-  } catch (e) {
-    metaSections.targets = { ok: false, reason: "error", message: String(e?.message || e).slice(0, 400) };
+  if (wantTargets) {
+    try {
+      targets = getTargets(TARGETS, brand, years);
+      metaSections.targets = targets ? { ok: true } : { ok: false, reason: "no-targets" };
+    } catch (e) {
+      metaSections.targets = { ok: false, reason: "error", message: String(e?.message || e).slice(0, 400) };
+    }
   }
 
   const emptySections = {
@@ -147,13 +177,30 @@ export default async function handler(req, res) {
     });
   }
 
+  // A filter that selected no query at all: answer immediately rather than run the full
+  // set the caller was explicitly trying to avoid.
+  if (!queries.length) {
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({
+      sections: emptySections,
+      meta: {
+        live: false,
+        brand,
+        reason: "no-sections",
+        message: `only=${q.only || ""} / except=${q.except || ""} selected none of the ` +
+          `available sections (${INSIGHT_QUERIES.map((s) => s.key).join(", ")}).`,
+        sections: metaSections,
+      },
+    });
+  }
+
   try {
     const results = await settledPool(
-      INSIGHT_QUERIES.map((spec) => () => shopifyQL(cfg, spec.build(start, end, limit))),
+      queries.map((spec) => () => shopifyQL(cfg, spec.build(start, end, limit))),
       2,
     );
     const rowsByKey = {};
-    INSIGHT_QUERIES.forEach((spec, i) => {
+    queries.forEach((spec, i) => {
       const r = results[i];
       if (r.status === "fulfilled") {
         rowsByKey[spec.key] = r.value.rows;
@@ -180,11 +227,11 @@ export default async function handler(req, res) {
       }
     }
 
-    let categories = null;
-    if (skuRows) {
-      categories = buildCategoryMix(skuRows, CATEGORY_MAP);
-      categories.truncated = skuRows.length >= SKU_PULL_LIMIT;
-    }
+    // Category mix from Shopify's own product_type. Null when the store sets no
+    // product_type in the range — the panel then shows an empty state instead of a mix
+    // invented from SKU naming, which is what it used to do.
+    const categories = rowsByKey.productTypes ? parseCategoryMix(rowsByKey.productTypes) : null;
+    if (categories) categories.truncated = rowsByKey.productTypes.length >= PRODUCT_TYPE_LIMIT;
 
     const referrers = rowsByKey.referrers ? parseReferrers(rowsByKey.referrers) : null;
     const orderReferrers = rowsByKey.orderReferrers
@@ -200,6 +247,23 @@ export default async function handler(req, res) {
     const discountMonthly = rowsByKey.discountMonthly
       ? parseDiscountMonthly(rowsByKey.discountMonthly)
       : null;
+
+    // The merchant's ACTUAL configured terms for the codes in this report, so the
+    // Promotions panels can state what a code gives the customer without a hand-written
+    // table or a guess parsed from the code's name. Best-effort and unbatched with the
+    // ShopifyQL pool (it's the Admin API, not analytics): a token without read_discounts
+    // just leaves terms null and the UI shows "—".
+    const parsedCodes = rowsByKey.discountCodes ? parseDiscountCodes(rowsByKey.discountCodes) : null;
+    let discountTerms = null;
+    if (parsedCodes?.codes?.length) {
+      try {
+        const nodes = await fetchDiscountTerms(cfg, parsedCodes.codes.map((c) => c.code));
+        discountTerms = parseDiscountTerms(nodes);
+        metaSections.discountTerms = { ok: true, resolved: Object.keys(discountTerms).length };
+      } catch (e) {
+        metaSections.discountTerms = failInfo(e);
+      }
+    }
     const voucherReport = rowsByKey.discountCodes
       ? buildVoucherReport(rowsByKey.discountCodes, rowsByKey.discountMonthly)
       : null;
@@ -209,10 +273,10 @@ export default async function handler(req, res) {
       bestSellers: bySku || byTitle ? { bySku, byTitle, images } : null,
       discounts: rowsByKey.discountCodes || discountMonthly
         ? {
-            ...(rowsByKey.discountCodes
-              ? parseDiscountCodes(rowsByKey.discountCodes)
-              : { codes: null, others: null, noCode: null }),
+            ...(parsedCodes || { codes: null, others: null, noCode: null }),
             monthly: discountMonthly,
+            // { CODE: {kind, amount, percentage, minSubtotal, usageLimit, …} }
+            terms: discountTerms,
           }
         : null,
       categories,
@@ -232,6 +296,9 @@ export default async function handler(req, res) {
       range: { start, end },
       apiVersion: cfg.version,
       limit,
+      // Which of the ten queries this response actually covers — so a caller merging
+      // two partitioned payloads can tell "not asked for" from "failed".
+      queries: queries.map((s) => s.key),
       sections: metaSections,
     };
 

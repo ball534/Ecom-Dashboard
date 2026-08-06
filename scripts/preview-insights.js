@@ -2,8 +2,8 @@
 // Prints the LIVE insight sections (best sellers, discount codes + monthly rows,
 // category mix, traffic attribution + monthly referrers + landing pages, funnel,
 // voucher report, targets) exactly as /api/insights computes them, so you can
-// eyeball them against the Shopify admin — and see which SKU prefixes still need
-// adding to lib/category-map.js.
+// eyeball them against the Shopify admin — including how much of the range Shopify
+// has no product_type for (the Category Mix panel's only input).
 //
 // Usage:  node scripts/preview-insights.js [brand] [start] [end] [--probe]
 //   defaults: SG, current-year-01-01, today.
@@ -27,9 +27,10 @@ import {
   parseTrafficMonthly,
   parseLandingPages,
   buildVoucherReport,
-  buildCategoryMix,
+  parseCategoryMix,
+  parseDiscountTerms,
+  PRODUCT_TYPE_LIMIT,
 } from "../lib/insights.js";
-import { CATEGORY_MAP } from "../lib/category-map.js";
 import { TARGETS, getTargets } from "../lib/targets.js";
 
 loadEnv();
@@ -102,19 +103,23 @@ if (rowsByKey.discountCodes) {
   if (d.others) console.log(`   … +${d.others.count} more codes: ${f(d.others.orders)} orders, ${f(d.others.gross)} gross, ${f(d.others.discount)} discount`);
   if (d.noCode) console.log(`   (no code: ${f(d.noCode.orders)} orders, ${f(d.noCode.gross)} gross)`);
 }
-if (rowsByKey.skuSales) {
-  const mix = buildCategoryMix(rowsByKey.skuSales, CATEGORY_MAP);
-  mix.truncated = rowsByKey.skuSales.length >= SKU_PULL_LIMIT;
-  table("Category mix (SKU-prefix map)", mix.rows, [
-    ["Category", 24, "category"], ["Gross", -12, "gross", f], ["Units", -8, "qty", f],
-    ["Share", -7, "share", (v) => (v * 100).toFixed(1) + "%"],
-  ]);
-  const total = mix.rows.reduce((t, r) => t + r.gross, 0);
-  console.log(`   Σ gross ${f(total)}${mix.truncated ? "  ⚠ SKU pull hit its row limit — mix is approximate" : ""}`);
-  if (mix.unmapped.length) {
-    table("UNMAPPED PREFIXES (add these to lib/category-map.js)", mix.unmapped, [
-      ["Prefix", 8, "prefix"], ["Gross", -12, "gross", f], ["Units", -8, "qty", f],
+if (rowsByKey.productTypes) {
+  const mix = parseCategoryMix(rowsByKey.productTypes);
+  if (!mix) {
+    console.log("\n   Category mix: Shopify has no product_type on any sales in this range — " +
+      "the panel shows an empty state (nothing is inferred from SKU naming).");
+  } else {
+    mix.truncated = rowsByKey.productTypes.length >= PRODUCT_TYPE_LIMIT;
+    table("Category mix (live product_type)", mix.rows, [
+      ["Category", 24, "category"], ["Gross", -12, "gross", f], ["Units", -8, "qty", f],
+      ["Share", -7, "share", (v) => (v * 100).toFixed(1) + "%"],
     ]);
+    const total = mix.rows.reduce((t, r) => t + r.gross, 0);
+    console.log(`   Σ classified gross ${f(total)}${mix.truncated ? "  ⚠ product_type pull hit its row limit" : ""}`);
+    if (mix.unclassified) {
+      console.log(`   ⚠ no product_type set in Shopify for ${f(mix.unclassified.gross)} gross / ` +
+        `${f(mix.unclassified.qty)} units — excluded from the mix, never guessed.`);
+    }
   }
 }
 if (rowsByKey.referrers) {
@@ -189,7 +194,8 @@ if (tgt) {
 
 if (probe) {
   console.log("\n── Probes ──────────────────────────────────────────────────");
-  console.log(`   SKU pull row count: ${rowsByKey.skuSales ? rowsByKey.skuSales.length : "n/a"} (SKU_PULL_LIMIT=${SKU_PULL_LIMIT}${rowsByKey.skuSales && rowsByKey.skuSales.length >= SKU_PULL_LIMIT ? " — HIT, consider raising/bulk" : " — ok"})`);
+  console.log(`   SKU pull row count: ${rowsByKey.skuSales ? rowsByKey.skuSales.length : "n/a"}`);
+  console.log(`   product_type row count: ${rowsByKey.productTypes ? rowsByKey.productTypes.length : "n/a"} (limit ${PRODUCT_TYPE_LIMIT})`);
   try {
     const { rows } = await shopifyQL(cfg, `FROM sales SHOW gross_sales GROUP BY product_variant_sku, product_type LIMIT 5 SINCE ${start} UNTIL ${end}`);
     console.log(`   two-column GROUP BY sku, product_type: ✅ parses (${rows.length} rows) — product_type merge is feasible later`);

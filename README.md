@@ -67,15 +67,19 @@ campaigns) and sales targets. All six ShopifyQL calls run in parallel
 `meta.sections.<key>` — the payload never 500s. See `lib/insights.js` (pure
 builders/parsers, unit-tested) and `api/insights.js`.
 
-**Two files the team maintains by hand** (validated by `npm test`):
+**One file the team maintains by hand** (validated by `npm test`):
 
-- **`lib/category-map.js`** — SKU prefix → category (Shopify `product_type` is
-  mostly blank on this store; SKU chars 3–4 encode the category, e.g. `AFBS` =
-  blouse). Run `npm run preview-insights` to see the top **unmapped** prefixes
-  ranked by gross sales, then add them here.
 - **`lib/targets.js`** — monthly sales targets per brand/year (`{year: [12]}`,
   null = no target). Feeds the Sales tab's Target vs Actual panel and the
-  "tracking ahead/behind target" insight bullet.
+  "tracking ahead/behind target" insight bullet. Targets exist nowhere in Shopify,
+  so this is the only figure on the dashboard that is not pulled from an API.
+
+Everything else on the dashboard is pulled live. `lib/category-map.js` (SKU prefix →
+category) was **removed**: Category Mix now groups on Shopify's own `product_type`, and
+sales with no `product_type` set are reported as unclassified rather than assigned a
+guessed category. Discount terms likewise come from the merchant's configured discounts
+via `codeDiscountNodeByCode`, not a local table. Run `npm run preview-insights` to see
+how much of a range Shopify has no `product_type` for.
 
 ## ✅ Token status (as of 2026-06-18)
 
@@ -144,9 +148,10 @@ Read-only. Every scope below is traceable to a specific call in `api/_shopify.js
 | `read_all_orders` | without it the Orders path only reaches back **60 days**. Requires Shopify approval |
 | `read_customers` | `customer { id numberOfOrders }` in `ORDERS_QUERY` — drives new-vs-returning |
 | `read_products` | `fetchProductImagesByTitle()` — best-seller thumbnails via `products(query: "title:…")` |
+| `read_discounts` | `fetchDiscountTerms()` — the configured terms behind each code (value, minimum spend, usage limits) shown in the Promotions panels |
 
 ```
-read_reports, read_analytics, read_orders, read_all_orders, read_customers, read_products
+read_reports, read_analytics, read_orders, read_all_orders, read_customers, read_products, read_discounts
 ```
 
 Plus **protected customer data** access, requested inside the app config — it is *not* a
@@ -155,8 +160,10 @@ degrades gracefully: `ShopifyError` with `reason: "scope"` and the panel shows d
 
 `rights.md` records the full scope list currently granted on the store; it is a superset of
 the above (most of it is unused by this repo). Note that `FROM fulfillments` goes through
-ShopifyQL/`read_reports` — the fulfillment scopes are **not** needed. Neither is
-`read_discounts`: discount-code performance also comes from ShopifyQL.
+ShopifyQL/`read_reports` — the fulfillment scopes are **not** needed. `read_discounts`
+IS now needed, but only for the *terms* behind each code (what the customer gets);
+discount-code **performance** still comes from ShopifyQL, so without the scope the
+Promotions figures are unaffected and only the terms line shows "—".
 
 ### Getting a working token (`shpat_`)
 

@@ -5,6 +5,8 @@
 //
 // Query params (optional):
 //   ?start=YYYY-MM-DD&end=YYYY-MM-DD   — defaults to (current year)-01-01 .. today
+//   ?only=fulfillment                  — serve ONLY the pickup-vs-delivery split, from
+//                                        its own cheap orders pull (see below)
 //
 // Success  -> { SG: {rev,ord,uni,dis,vou,cust,ret,ses,conversion}, meta:{ live:true, ... } }
 // Failure  -> { SG: {}, meta:{ live:false, reason } }                          (not cached)
@@ -22,6 +24,7 @@ import {
   envNames,
   envSuffix,
   fetchOrders,
+  fetchFulfillmentOrders,
   fetchVariantCompareAt,
   shopifyQL,
   ShopifyError,
@@ -58,6 +61,12 @@ function emptyMetrics(years) {
 const SHOP_TZ = "Asia/Singapore";
 const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
 
+// Wall-clock bound on the `only=fulfillment` orders pull, well inside the endpoint's
+// 60s ceiling so the function answers with a reason instead of being killed. On expiry
+// the section FAILS — a partial pull is a chronological prefix, and a percentage
+// computed from one is biased (see fetchFulfillmentOrders).
+const FULFILLMENT_BUDGET_MS = 45000;
+
 // Per-section failure record for meta.sections — same convention as api/insights.js,
 // so the front-end reads one shape wherever a section is reported on.
 const failInfo = (e) => ({
@@ -85,6 +94,63 @@ function todayInTZ(tz) {
     month: "2-digit",
     day: "2-digit",
   }).format(new Date());
+}
+
+// `only=fulfillment` — the pickup-vs-delivery split on its own, from the cheap
+// four-scalar orders pull. It exists because the split used to ride the FULL orders
+// pull below (45+ sequential pages of line-item payload, then the compareAt lookup),
+// which put it right on the 60s function ceiling: slow on a good day, and gone
+// entirely on a bad one, even though the split needs none of that data. A separate
+// request gets its own budget, and — because it either covers the whole window or
+// fails — a success is safe to edge-cache.
+async function fulfillmentOnly(res, cfg, brand, start, end) {
+  // shippingAddress.zip is protected customer data on some tokens. A denial costs only
+  // the delivery-district breakdown — the split itself comes off shippingLine — so
+  // retry once without the address rather than lose the section.
+  let includeShipAddress = true;
+  let pull;
+  try {
+    const opts = { start, end, timeBudgetMs: FULFILLMENT_BUDGET_MS };
+    try {
+      pull = await fetchFulfillmentOrders(cfg, { ...opts, includeShipAddress });
+    } catch (e) {
+      if (!(e instanceof ShopifyError) || e.reason !== "scope") throw e;
+      includeShipAddress = false;
+      pull = await fetchFulfillmentOrders(cfg, { ...opts, includeShipAddress });
+    }
+  } catch (e) {
+    const info = failInfo(e);
+    res.setHeader("Cache-Control", "no-store");
+    return res.status(200).json({
+      sections: { fulfillment: null },
+      meta: {
+        live: false,
+        brand,
+        only: "fulfillment",
+        range: { start, end },
+        reason: info.reason,
+        message: info.message,
+        sections: { fulfillment: info },
+      },
+    });
+  }
+
+  res.setHeader("Cache-Control", "public, s-maxage=300, stale-while-revalidate=600");
+  return res.status(200).json({
+    sections: { fulfillment: buildFulfillmentSection(pull.orders) },
+    meta: {
+      live: true,
+      brand,
+      only: "fulfillment",
+      asOf: new Date().toISOString(),
+      range: { start, end },
+      orderCount: pull.orders.length,
+      pages: pull.pages,
+      // `truncated` is always false here by construction — an incomplete pull throws
+      // rather than being served. Kept in the shape so readers see one convention.
+      sections: { fulfillment: { ok: true, regions: includeShipAddress, truncated: false } },
+    },
+  });
 }
 
 export default async function handler(req, res) {
@@ -122,6 +188,10 @@ export default async function handler(req, res) {
   let end = isDate(q.end) ? q.end : today;
   if (start > end) [start, end] = [end, start]; // tolerate swapped inputs
 
+  if (String(q.only || "") === "fulfillment") {
+    return fulfillmentOnly(res, cfg, brand, start, end);
+  }
+
   // `light=1` skips the Orders API pagination entirely and returns ONLY the ShopifyQL
   // Analytics figures. The dashboard uses it to load full multi-year history fast (one
   // round trip per dataset) for the year-on-year chart, without risking a cold-start
@@ -134,32 +204,18 @@ export default async function handler(req, res) {
 
   try {
     // Try with customer data (new vs returning). If the app lacks protected-
-    // customer-data approval, retry without it so the other metrics still load.
-    // The shipping address (delivery-region zips) is protected the same way, so it
-    // gets a fallback of its own. Order matters: the address field is approved
-    // separately from (and less commonly than) the customer block, so drop the
-    // ADDRESS first — a token approved for customer data but not addresses keeps its
-    // new-vs-returning split and only loses delivery regions. Ladder:
-    //   1. customer + address  →  2. customer only  →  3. neither.
+    // customer-data approval, retry without it so the other metrics still load. The
+    // shipping address used to need a fallback of its own here; it moved out with the
+    // fulfillment section, which now has its own pull and its own ladder.
     let includeCustomer = true;
-    let includeShipAddress = true;
     let result = { orders: [], truncated: false };
     if (!light) {
       try {
-        result = await fetchOrders(cfg, { start, end, includeCustomer, includeShipAddress });
+        result = await fetchOrders(cfg, { start, end, includeCustomer });
       } catch (e) {
         if (e instanceof ShopifyError && e.reason === "scope") {
-          includeShipAddress = false;
-          try {
-            result = await fetchOrders(cfg, { start, end, includeCustomer, includeShipAddress });
-          } catch (e2) {
-            if (e2 instanceof ShopifyError && e2.reason === "scope") {
-              includeCustomer = false;
-              result = await fetchOrders(cfg, { start, end, includeCustomer, includeShipAddress });
-            } else {
-              throw e2;
-            }
-          }
+          includeCustomer = false;
+          result = await fetchOrders(cfg, { start, end, includeCustomer });
         } else {
           throw e;
         }
@@ -220,22 +276,16 @@ export default async function handler(req, res) {
     }
 
     // Order-derived insight sections — FULL mode only (light mode never pages orders,
-    // so it cannot serve them and its response shape stays exactly as before). Both
-    // are computed from the SAME orders array already pulled above — no second pull.
-    // Each section is individually best-effort: a failure nulls that section and
-    // records why in meta.sections.<key>, never the whole payload. Runs AFTER the
-    // ShopifyQL calls so the compareAt lookup doesn't compete with them for cost budget.
+    // so it cannot serve them and its response shape stays exactly as before), computed
+    // from the orders array already pulled above rather than a second pull. Best-effort:
+    // a failure nulls the section and records why in meta.sections.<key>, never the
+    // whole payload. Runs AFTER the ShopifyQL calls so the compareAt lookup doesn't
+    // compete with them for cost budget. The fulfillment split used to live here too;
+    // it needs none of this data, so it moved to `only=fulfillment` above.
     let sections = null;
     const sectionsMeta = {};
     if (!light) {
-      sections = { fulfillment: null, saleMix: null };
-      // Pickup vs delivery split (+ pickup points, delivery districts). Pure local math.
-      try {
-        sections.fulfillment = buildFulfillmentSection(result.orders);
-        sectionsMeta.fulfillment = { ok: true, regions: includeShipAddress, truncated: result.truncated };
-      } catch (e) {
-        sectionsMeta.fulfillment = failInfo(e);
-      }
+      sections = { saleMix: null };
       // Sale-vs-full-price mix: one batched compareAtPrice lookup over the DISTINCT
       // variant ids actually seen in the pulled lines, then pure local classification.
       // If the lookup fails, the section is null — classifying every line "full"
@@ -321,7 +371,6 @@ export default async function handler(req, res) {
         monthsLive: Object.fromEntries(years.map((y) => [y, monthsWithData(metrics.ord[y])])),
         light,
         includeCustomer: light ? false : includeCustomer,
-        includeShipAddress: light ? false : includeShipAddress,
         orderCount: result.orders.length,
         truncated: result.truncated,
         // Where the live sales/sessions numbers came from, so the header can be honest.

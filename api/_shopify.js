@@ -269,18 +269,17 @@ export async function shopifyQL(cfg, ql) {
 // (originalTotal + taxLines + discountAllocations) reconstruct Shopify's
 // tax-EXCLUDED Gross Sales and Discounts exactly as the Analytics report does.
 //
-// The extra per-order fields feed the order-derived insight sections:
-//   • shippingLine.title       — pickup-vs-delivery discriminator ("Pick Up @ <store> (...)").
-//   • shippingAddress.zip      — delivery postal district (first 2 digits, aggregated
-//     server-side; the raw zip never leaves normalizeOrder). This is PROTECTED customer
-//     data on some tokens, so it is independently droppable (`includeShipAddress`) —
-//     a scope denial degrades to pickup-split-without-regions instead of failing the pull.
-//   • lineItems sku + variant.id — sale-vs-full-price classification (variant ids are
-//     joined against current compareAtPrice via fetchVariantCompareAt). The sold unit
-//     price is DERIVED as originalTotal/quantity rather than requesting
-//     originalUnitPriceSet — identical value, zero extra query cost (measured live:
-//     requestedQueryCost 380 per page against the 20,000-point bucket).
-const ORDERS_QUERY = (includeCustomer, includeShipAddress = true) => `
+// lineItems sku + variant.id feed the sale-vs-full-price classification (variant ids
+// are joined against current compareAtPrice via fetchVariantCompareAt). The sold unit
+// price is DERIVED as originalTotal/quantity rather than requesting
+// originalUnitPriceSet — identical value, zero extra query cost (measured live:
+// requestedQueryCost 380 per page against the 20,000-point bucket).
+//
+// The pickup-vs-delivery fields are deliberately NOT here. That split needs four
+// scalars per order and no line items at all, so it is served by the far cheaper
+// FULFILLMENT_ORDERS_QUERY below — it no longer waits on, or dies with, this
+// heavyweight pull. See fetchFulfillmentOrders.
+const ORDERS_QUERY = (includeCustomer) => `
 query Orders($cursor: String, $q: String!) {
   orders(first: 250, after: $cursor, query: $q, sortKey: CREATED_AT) {
     pageInfo { hasNextPage endCursor }
@@ -291,8 +290,6 @@ query Orders($cursor: String, $q: String!) {
         cancelledAt
         taxesIncluded
         paymentGatewayNames
-        shippingLine { title }
-        ${includeShipAddress ? "shippingAddress { zip }" : ""}
         lineItems(first: 100) {
           edges { node {
             quantity
@@ -344,18 +341,92 @@ export async function fetchProductImagesByTitle(cfg, titles) {
   return out;
 }
 
+// Real, configured terms for a set of discount CODES — what the customer actually gets,
+// straight from the discount the merchant set up in Shopify.
+//
+// The dashboard used to carry a hand-written table of code → "$12 off · min $80 · 1
+// use/customer", plus a pile of guesswork that parsed the code name and reverse-engineered
+// amounts from average discount per order. Both invent facts: a code whose terms changed
+// in Shopify kept showing the old ones, and the inferred figures were never verified by
+// anything. These are the merchant's own values.
+//
+// `codeDiscountNodeByCode` is an exact lookup, so the whole set resolves in ONE aliased
+// request (same shape as fetchProductImagesByTitle). Requires `read_discounts`; a token
+// without it raises ShopifyError("scope") and callers serve the section without terms
+// rather than falling back to a guess.
+const DISCOUNT_TERM_FIELDS = `
+  __typename
+  ... on DiscountCodeBasic {
+    title status startsAt endsAt usageLimit appliesOncePerCustomer
+    customerGets { value {
+      __typename
+      ... on DiscountAmount { amount { amount currencyCode } appliesOnEachItem }
+      ... on DiscountPercentage { percentage }
+    } }
+    minimumRequirement {
+      __typename
+      ... on DiscountMinimumSubtotal { greaterThanOrEqualToSubtotal { amount currencyCode } }
+      ... on DiscountMinimumQuantity { greaterThanOrEqualToQuantity }
+    }
+  }
+  ... on DiscountCodeFreeShipping {
+    title status startsAt endsAt usageLimit appliesOncePerCustomer
+    minimumRequirement {
+      __typename
+      ... on DiscountMinimumSubtotal { greaterThanOrEqualToSubtotal { amount currencyCode } }
+      ... on DiscountMinimumQuantity { greaterThanOrEqualToQuantity }
+    }
+  }
+  ... on DiscountCodeBxgy {
+    title status startsAt endsAt usageLimit appliesOncePerCustomer
+    customerBuys { value {
+      __typename
+      ... on DiscountQuantity { quantity }
+      ... on DiscountPurchaseAmount { amount }
+    } }
+    customerGets { value {
+      __typename
+      ... on DiscountOnQuantity { quantity { quantity } effect {
+        __typename
+        ... on DiscountAmount { amount { amount currencyCode } }
+        ... on DiscountPercentage { percentage }
+      } }
+    } }
+  }`;
+
+// Returns { "<CODE>": <raw codeDiscount node>, ... } — codes Shopify doesn't know are
+// simply absent (callers then show no terms rather than an invented mechanic).
+export async function fetchDiscountTerms(cfg, codes) {
+  const list = [...new Set((codes || []).filter(Boolean).map((c) => String(c)))].slice(0, 50);
+  if (!list.length) return {};
+  const vars = {};
+  const parts = list.map((c, i) => {
+    vars["c" + i] = c;
+    return `d${i}: codeDiscountNodeByCode(code: $c${i}) { codeDiscount { ${DISCOUNT_TERM_FIELDS} } }`;
+  });
+  const query =
+    `query DiscountTerms(${list.map((_, i) => `$c${i}: String!`).join(", ")}) { ${parts.join(" ")} }`;
+  const data = await shopifyGraphQL(cfg, query, vars);
+  const out = {};
+  list.forEach((c, i) => {
+    const node = data?.["d" + i]?.codeDiscount;
+    if (node) out[c] = node;
+  });
+  return out;
+}
+
 // Page through all orders matching a created_at window, returning normalized records.
 // `maxPages` is a safety cap (250 orders/page). For very large multi-year pulls,
 // swap this for a Bulk Operation (see README) — the aggregation logic is unchanged.
-// `includeCustomer` and `includeShipAddress` are independent protected-data switches:
-// api/dashboard.js drops them one at a time when Shopify denies the scope, so a token
-// without protected-customer-data approval still gets everything the token CAN serve.
+// `includeCustomer` is a protected-data switch: api/dashboard.js drops it when Shopify
+// denies the scope, so a token without protected-customer-data approval still gets
+// everything the token CAN serve.
 export async function fetchOrders(
   cfg,
-  { start, end, includeCustomer = true, includeShipAddress = true, maxPages = 400 } = {},
+  { start, end, includeCustomer = true, maxPages = 400 } = {},
 ) {
   const q = `created_at:>=${start} created_at:<=${end}`;
-  const query = ORDERS_QUERY(includeCustomer, includeShipAddress);
+  const query = ORDERS_QUERY(includeCustomer);
   const orders = [];
   let cursor = null;
   let pages = 0;
@@ -376,6 +447,92 @@ export async function fetchOrders(
   } while (cursor && pages < maxPages);
 
   return { orders, truncated: Boolean(cursor), pages };
+}
+
+// The pickup-vs-delivery split reads FOUR scalars per order and nothing else:
+//   • shippingLine.title   — the discriminator ("Pick Up @ <store> (<address>)").
+//     fulfillmentOrders.deliveryMethod is access-denied on this token, so the title is
+//     the only reliable signal.
+//   • shippingAddress.zip  — delivery postal district (first 2 chars; the raw zip is
+//     dropped inside normalizeOrder and never leaves the server). PROTECTED customer
+//     data on some tokens, hence independently droppable via `includeShipAddress` —
+//     a denial degrades to pickup-split-without-regions instead of failing the pull.
+//   • cancelledAt          — cancelled orders are excluded from the split so it ties to
+//     the ShopifyQL Orders KPI shown beside it.
+//   • test                 — test orders are dropped entirely.
+// No line items, no money, no customer block: a page here costs a fraction of an
+// ORDERS_QUERY page, which is what lets the split load in its own fast request
+// (/api/dashboard?only=fulfillment) rather than riding the heavyweight pull.
+const FULFILLMENT_ORDERS_QUERY = (includeShipAddress = true) => `
+query FulfillmentOrders($cursor: String, $q: String!) {
+  orders(first: 250, after: $cursor, query: $q, sortKey: CREATED_AT) {
+    pageInfo { hasNextPage endCursor }
+    edges {
+      node {
+        createdAt
+        test
+        cancelledAt
+        shippingLine { title }
+        ${includeShipAddress ? "shippingAddress { zip }" : ""}
+      }
+    }
+  }
+}`;
+
+// Page a window for the pickup-vs-delivery split ONLY. Records come back through the
+// same normalizeOrder as the full pull, so isPickup / pickupPoint / shipZipDistrict are
+// derived by exactly one piece of code and the resulting split is identical whichever
+// query fed it.
+//
+// Those records carry amount/units/discounts of 0 and no `lines` — the fields simply
+// weren't requested. They must NEVER reach bucketOrders; buildFulfillmentSection is the
+// only legitimate consumer.
+//
+// FAIL-CLEAN: an incomplete pull THROWS rather than returning what it has. Orders arrive
+// in created_at order, so a partial pull is a chronological PREFIX of the window, not a
+// sample of it — a pickup percentage computed from one would be biased by however the
+// mix moves through the year, and would look entirely plausible on screen. A blank panel
+// is the honest outcome. Same principle as lib/http.js's `deadline`.
+export async function fetchFulfillmentOrders(
+  cfg,
+  { start, end, includeShipAddress = true, maxPages = 400, timeBudgetMs = 0 } = {},
+) {
+  const q = `created_at:>=${start} created_at:<=${end}`;
+  const query = FULFILLMENT_ORDERS_QUERY(includeShipAddress);
+  const startedAt = Date.now();
+  const orders = [];
+  let cursor = null;
+  let pages = 0;
+
+  do {
+    // Checked BEFORE each page so the budget is a bound on the whole pull, leaving the
+    // caller's serverless invocation room to answer instead of being killed mid-flight.
+    if (timeBudgetMs > 0 && Date.now() - startedAt > timeBudgetMs) {
+      throw new ShopifyError(
+        "timeout",
+        `fulfillment order pull exceeded its ${timeBudgetMs}ms budget after ${pages} pages`,
+      );
+    }
+    const data = await shopifyGraphQL(cfg, query, { cursor, q });
+    const conn = data.orders;
+    for (const e of conn.edges) {
+      const o = normalizeOrder(e.node);
+      if (o.test) continue;
+      orders.push(o);
+    }
+    cursor = conn.pageInfo.hasNextPage ? conn.pageInfo.endCursor : null;
+    pages += 1;
+  } while (cursor && pages < maxPages);
+
+  // Hitting the page cap is NOT transient — a refetch reproduces it exactly — so it
+  // carries its own reason and callers must not schedule a retry for it.
+  if (cursor) {
+    throw new ShopifyError(
+      "truncated",
+      `fulfillment order pull hit its ${maxPages}-page cap (${orders.length} orders) with more remaining`,
+    );
+  }
+  return { orders, pages };
 }
 
 // Current catalogue price + compareAtPrice for a set of variant GIDs, via GraphQL

@@ -490,7 +490,9 @@ const FX_MYR_SGD=0.30; // approx MYR->SGD for the combined Group total; edit to 
 // Discount-code performance — [code, revenueGenerated, redemptions(orders), discountGiven]. Top codes by revenue.
 // iORA SG/MY + TRT SG/MY: full 2024–2026 (Shopify). SANS/Monoloq: headline 2026 code only (approx) — full table pending re-pull.
 const DISCOUNTS={};
-const DISC_PARTIAL={SANSSG:1,SANSMY:1,MONOSG:1,MONOMY:1}; // headline code only, approximate
+// No pre-judged data-quality flags: every brand's discount figures come from the same
+// live pull, so a brand either has them or its panel is empty. (A hard-coded list of
+// brands marked "headline code only, approximate" used to live here.)
 /* Per-month, per-discount performance — INCLUDES automatic discounts as well as codes.
    Row = [name, revenue, orders, discountGiven, type] where type is "auto" (auto-applied at checkout)
    or "code" (customer-entered). Shape: DISC_MONTHLY[brand][year] = [ month0[], month1[], ... 12 ] (null = no pull).
@@ -498,7 +500,8 @@ const DISC_PARTIAL={SANSSG:1,SANSMY:1,MONOSG:1,MONOMY:1}; // headline code only,
    excluded from the top list (1 order each — never top performers). Other stores/years pending a Shopify pull. */
 const DISC_MONTHLY={};
 const TYPE_BADGE=t=>'<span style="display:inline-block;font-size:9.5px;letter-spacing:.08em;font-weight:700;text-transform:uppercase;padding:2px 7px;border-radius:999px;'+(t==="auto"?"background:var(--accent-soft);color:var(--accent)":t==="pos"?"background:#E7E1D3;color:#6B5E0E":"background:var(--paper2);color:var(--muted)")+'">'+(t==="auto"?"Auto":t==="pos"?"POS":"Code")+'</span>';
-const DISC_MECH={FIRST:"$3 off · min $20 · 1 use/customer","12OFF80":"$12 off · min $80 · 1 use/customer",TWENTYOFF:"$20 off · min $100",THIRTY8OFF:"$38 off · min $150",IORABD5:"$5 off · min $4.90 · 1 use",FLASHELEVEN:"$11 off · min $60 · 1 use",FLASHE11:"$11 off · min $60 · 1 use","11FLASH":"$11 off · min $60 · 1 use",OCT10:"$10 off · min $60 · 1 use",FLASH10:"$10 off · min $50 · 1 use",STORENEW:"$2.50 off",NOV8OFF:"$8 off · 1 use",NOVTENOFF:"$10 off · min $80 · 1 use",IORACONNECT5:"$5 off · 1 use",TESTING50:"50% off entire order","20OFFFEB24":"20% off · 1 use/customer",MNQAPR:"20% off · 1 use/customer",MNQAUG0:"20% off · 1 use/customer",MNQSEP0:"20% off · 1 use/customer",MNQSEP1:"20% off · 1 use/customer",MNQGOLD:"20% off · 1 use/customer",MNQOCT0:"20% off · 1 use/customer",MNQNOV0:"20% off · 1 use/customer",JUNE50:"RM50 off · min RM300 · 1 use",MAPR30:"RM30 off · 1 use",JULFLASH:"RM50 off · 1 use (cap 30)",JULYSPECIAL:"RM60 off · min RM400 · 1 use",MISSU30:"RM30 off · Aug target segment",MYMDK:"RM50 off · min RM300 (cap 100)",MNQRETAIL30:"RM30 off · min RM300 · Silver",MNQRETAIL50:"RM50 off · min RM300 · 2 segments",BACKUP30:"RM30 off · min RM300 · 1 use",BACKUP50:"RM50 off · min RM300 · 1 use","2 FOR $29.90":"Automatic · 2 items for $29.90","EXCLUSIVE PAIR $39.90":"Automatic · 2 items for $39.90","BUY 2, GET $10 OFF":"Automatic · $10 off when buying 2","RAYA 26 - 4 ITEMS - 18% OFF":"Automatic · 18% off 4+ items","RAYA 26 - 2 ITEMS - 12% OFF":"Automatic · 12% off 2+ items"}; // code(UPPER)->mechanics, pulled from Shopify discount summaries
+// Discount terms are no longer kept here. They come from the merchant's own Shopify
+// discounts via /api/insights (sections.discounts.terms) — see LIVE_TERMS below.
 // Channel Mix — LIVE from /api/marketplace (Shopee + Lazada order pulls) merged with the
 // Shopify revenue series for the Website column. Shape:
 // CHANNELMIX[brand][year]={Website:[12],Shopee:[12],Lazada:[12]} (monthly revenue per channel).
@@ -559,13 +562,17 @@ const METRICS={
 };
 const KPI_ORDER=["revenue","orders","aov","sessions","discounts"];
 const PRODUCTS={};
-const CATS=["Knit","Tops","Outerwear","Bottoms","Skirts","Dresses"];
-const CAT_ORDER=["Bottoms","Knit","Outerwear","Tops","Skirts","Dresses"];
-function catColor(c){const P=[AC(),"#D98240","#5F72A8","#7FA98F","#C7A76B","#8A6A6A"];const i=CAT_ORDER.indexOf(c);return i>=0?P[i]:"#B0A08C";}
+// Categories are whatever product_type values Shopify returns for the range — there
+// is no fixed list any more (the old six-name CATS/CAT_ORDER arrays silently dropped
+// any category outside them). Colour is assigned from a stable hash of the category
+// name so a given category keeps its colour across renders and brands.
+const CAT_PALETTE=["#D98240","#5F72A8","#7FA98F","#C7A76B","#8A6A6A","#B0A08C","#6E8BA0","#9A7AA0"];
+function catColor(c){var s=String(c||""),h=0;for(var i=0;i<s.length;i++)h=(h*31+s.charCodeAt(i))>>>0;
+  return CAT_PALETTE[h%CAT_PALETTE.length];}
 const CAT_REV=null;
-const IMG={"Knit Top":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AFKS_2838_JS_FOREST_2.jpg?v=1777360703","Scrunchy Sleeves Blazer":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AJK_9794_PINK_1.jpg?v=1774524962","Cropped Knit Top":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/BK_9187_DENIM_BLUE_1.jpg?v=1760439864","Square Neck Knit Top":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AK_11676_TANGERINE_RED_2.jpg?v=1767780457","A-Line Flare Skirt":"https://cdn.shopify.com/s/files/1/0694/6098/4124/products/ASK-9018-PLEATED-DETAIL-SKIRT-BLACK.jpg?v=1754642118","Plain Culottes":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AP4437BASICCULOTTESBLACK_2.jpg?v=1770134131","Slitted Denim Skirt":"https://cdn.shopify.com/s/files/1/0694/6098/4124/products/10605-MIDI-SKIRT-CREAM.jpg?v=1754640197","Peter Pan Puff Sleeve Top":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AT_11771_PLUM.jpg?v=1762166233","Buttoned Jersey Blouse":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AT10751BUTTONEDSHOULDERTOPDARKGREEN_2.jpg?v=1754640333","Boxy Cut Top":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AT_11760_CREAM.jpg?v=1761538135","Princess Seamed Dress":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/ADQ_8517_SKATER_DRESS_TEAL_BLUE.jpg?v=1754643346","V-Neck Raglan Knit":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AK8343UNECKKNITTEDTOPPINK_2.jpg?v=1754643490","Basic Tapered Trousers":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/APL12272STRAIGHTCUTPANTSARMYGREEN_2.jpg?v=1754634107","Wide Leg Pocketed Pants":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/BPL_13101_KHAKI_GREEN.jpg?v=1760501758","Cardigan":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AC_2721_CARDIGAN_K_GREEN.jpg?v=1754640849","Everyday Knit Tee":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AK_13218_BRICK_RED_2.jpg?v=1759292608","Round Neck Knit Top":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AKB_1453_BOXY_TOP_PALE_PINK_2.jpg?v=1771834199","V-Surpliced Tee":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AT_8097_GREY.jpg?v=1765883294","Drapey Wide Leg Trousers":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/88288cc7-7a4c-4099-94e6-39ad1c20802e.jpg?v=1763023798","Long Pants":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/APL_5577_BEIGE_1.jpg?v=1760513028","Sleeveless V-Neck Midi Dress":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AT11735A-LINEVNECKDRESSDARKGREEN.jpg?v=1754636153","Single Welt Pockets Shorts":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AFPS_8328_AG_KHAKI_BROWN_2.png?v=1777521483","Thick Waistband Wide Leg Jeans":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/BPL11728DOUBLEPOCKETPANTSLIGHTDENIM.jpg?v=1754636088","Pleated Magyar Blouse":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/BB10722ROSEPINK_2.jpg?v=1755569375","Basic Folded Cuff Tee":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AT_13190_PALE_YELLOW_2.jpg?v=1756889320","Flare Jumper Top":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AFTL_11770_DN_LIME_1.jpg?v=1773140293","Two-Piece Waffle Tee":"https://cdn.shopify.com/s/files/1/0694/6098/4124/files/AT13484HUEGREY.jpg?v=1762165268"};
+// Product photos come from /api/insights (bestSellers.images), which resolves them
 const PROD_MY={};
-const IMG_MY={"Scrunchy Sleeves Blazer":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AJK_9794_PINK_1.jpg?v=1774585898","Knit Top":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AFKS_2838_JS_FOREST_2.jpg?v=1777967760","A-line Mini Skort":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/ASK_11501_PINK.jpg?v=1760523202","Plain Culottes":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/ABV_12877_BOXY_VEST_TOP_WINE_and_AP_4437_CULOTTES_WINE.jpg?v=1754811711","Asymmetrical Gathers Midi Skirt":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/BSK_11829_TIERED_SKIRT_PINK.jpg?v=1754792416","V-Neck Raglan Knit":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AK_8343_U_NECK_KNITTED_TOP_PINK_2.jpg?v=1754811025","Long Pants":"https://cdn.shopify.com/s/files/1/0672/3164/5954/products/4449-merlot-long-pants.jpg?v=1700722958","Cotton Culottes":"https://cdn.shopify.com/s/files/1/0672/3164/5954/products/3117-KHAKI-OVERLAP-SKIRT.jpg?v=1754927339","Panelled Skirt":"https://cdn.shopify.com/s/files/1/0672/3164/5954/products/8228-PANELLED-SKIRT-CREAM.jpg?v=1700736034","Snap Button Skort":"https://cdn.shopify.com/s/files/1/0672/3164/5954/products/BSK-5236-BLACK-BUTTON-DOWN-SKIRT-scaled.jpg?v=1754811694","Basic Folded Cuff Tee":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AT_13190_DENIM_BLUE_2.jpg?v=1757328366","Boxy Cut Blouse":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AT_10051_BASIC_TOP_GREY_BLUE_2_1.jpg?v=1754927363","Boxy Cut Top":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AT_11760_CREAM_2.jpg?v=1762764189","V-Surpliced Tee":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AT_8097_GREY.jpg?v=1766478160","Front Pleats Shorts":"https://cdn.shopify.com/s/files/1/0672/3164/5954/products/9356-cream-front-pleats-shorts.jpg?v=1700753404","Wide Flare Trousers":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/IORA_6401.jpg?v=1754759128","Magyar Applique Tee":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/BT13673PINK_1.jpg?v=1767662534","Single Welt Pockets Shorts":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AFPS_8328_AG_KHAKI_BROWN_2.png?v=1777521372","Elasticised Pleated Flare Skirt":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/ASK12537ELASTICISEDPLEATEDFLARESKIRTHUEGREY_2.jpg?v=1754760346","Embroidered Applique Tee":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/BT13681NAVY_1.jpg?v=1768193798","Knitted Crew Top":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AKV_10057_PALE_AQUA_2.jpg?v=1754810638","Knitted Floral Crochet Top":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/BK_10362_STRIPED_KNIT_TOP_OLIVE_2.jpg?v=1754810622","Soft Crew Neck Top":"https://cdn.shopify.com/s/files/1/0672/3164/5954/files/AT_13393_DARK_RED.jpg?v=1765536363"};
+// live against the catalogue. The hand-pasted IMG_* URL maps that used to back this
 const CAT_REV_MY=null;
 const PROD_TRTSG={};
 const PROD_TRTMY={};
@@ -581,15 +588,15 @@ const CAT_REV_MONOSG=null;
 const CAT_REV_MONOMY=null;
 const PROD_MAP={SG:PRODUCTS,MY:PROD_MY,TRTSG:PROD_TRTSG,TRTMY:PROD_TRTMY,SANSSG:PROD_SANSSG,SANSMY:PROD_SANSMY,MONOSG:PROD_MONOSG,MONOMY:PROD_MONOMY};
 function prodOf(){return PROD_MAP[state.brand]||{};}
-const IMG_TRTSG={"Watercolour Sleeveless Dress": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CDQ001545W_WATERCOLOUR-1.jpg?v=1742295509", "Panelled Sleeveless Dress - Navy": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CDQ000971W-NAVY-1_a02a43a5-92d0-407a-812c-94ea3357e0cc.jpg?v=1733209939", "Denim Wide Cut Blouse - Dark Denim": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CBL000819A-DARK-DENIM-1-clopy_35908abf-99ff-49e8-af67-46b91bc8980f.jpg?v=1733401056", "Oversized Vest - Cream": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CBV001609Y_CREAM-2.jpg?v=1740043943", "Denim Paper Bag Shorts - Denim": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/DPS001387M-DENIM-1_2a05dba0-fc0f-469e-8dff-0650e00c4d22.jpg?v=1733202556", "Knitted Floral Top - Cream": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CK001463SCREAM-1copy.jpg?v=1735034914", "Denim Straight Trousers - Dark Denim": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/DPL001031A-DARK-DENIM-1_08a0f1e9-acfb-4dbb-b99d-e70afa7ae7b4.jpg?v=1733204466", "Patch Pocket Culottes - Denim": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/DPL001606M_DENIM-2.jpg?v=1736935429", "(C) Oversized Heavyweight Tee - Black": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/MT900249D_BLACK-1.jpg?v=1736334533", "Cotton Crew Neck Tee": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CT000033W-Cotton-Crew-Neck-Tee-Black-1_90994cbe-1fd1-4a38-8eca-480e6bda4df3.jpg?v=1733209327", "V-Neck Tee - Black": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CT001024D-APPLE-GREEN-1_295a43c6-c423-4ef8-a0d7-956b9eae7a4e.jpg?v=1733204103", "Spaghetti Camisole - Cream": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CTV001524W_CREAM-1_copy.jpg?v=1745491254", "Denim Culottes - Dark Denim": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/182-D.DENIM-4.jpg?v=1733211171", "Gathered Skirt - Blush": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CSK001224W-COCOA-1_1bd544ae-e89e-482a-8fd1-1c193e556eaf.jpg?v=1733210988", "Floral Sleeveless Blouse - Floral Red": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/195-YELLOW-2.jpg?v=1733204205", "Drawstring Cargo Skirt - Charcoal": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CSK001812Y_CHARCOAL.jpg?v=1769679366", "Striped Cap Sleeve Tee - Teal": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CT002003DSTRIPESTEAL-1.jpg?v=1772012314", "Gradient Tee - Navy": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CT001982D_NAVY-1.jpg?v=1769149168", "Drawcord Blouse - Cream": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CBV001501W_CREAM-2_copy.jpg?v=1735195402", "Floral Embroidery Tee - Denim": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CT001206W-RED-1-copy_b3771ba4-ab50-4216-85b7-4e451a587b78.jpg?v=1733204408", "Striped Cap Sleeve Tee - Sand": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CT002003D_STRIPES_SAND-1.jpg?v=1771997221", "Snap Button Tee - Cream": "https://cdn.shopify.com/s/files/1/0638/5162/6680/files/CT001105D-CREAM-1_4e5da7ea-3b91-4fbe-ab78-eb903421466e.jpg?v=1733210957"};
-const IMG_TRTMY={"Polyester Rayon Flare Pants": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/WP000006A-KHAKI-1.jpg?v=1731385923", "Cotton Pull-Up Shorts": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CPS000007A-CREAM-1-900x1349-1.jpg?v=1731357811", "Patch Pocket Culottes - Denim": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/DPL001606M_DENIM-2.jpg?v=1737013776", "Denim Circular Skirt - Dark Denim": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CK000966S-CREAM-1.jpg?v=1731417571", "Wide-Legged Culottes - Black": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CPL000243A-BLACK-1.jpg?v=1731389965", "Poly-Rayon Flare Pants": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/WP000983A-KHAKI-2.jpg?v=1731246300", "Cotton Rayon Smocked Waist Pants - Black": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CPL000994A-BLACK-1.jpg?v=1731245921", "Seam Detail Circular Skirt - Black": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CSK001017A-BLACK-1.jpg?v=1731387669", "Seam Detail Circular Skirt - Denim Blue": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CSK001017A_DENIM_BLUE-1.jpg?v=1737100619", "Rayon Cap Sleeves Blouse": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/WB000150A-ARMY-GREEN-1-1025x1536-1.jpg?v=1731386283", "Snap Button Tee - Cream": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CT001105D-CREAM-1.jpg?v=1731388398", "Snap Button Tee - Dusty Blue": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CT001105D-DUSTY-BLUE-1.jpg?v=1731388405", "(C) Oversized Heavyweight Tee - Black": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/MT900249D_BLACK-1.jpg?v=1731993349", "Floral Sleeveless Blouse - Floral Red": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CBV001196H-FLORAL-RED-1-copy.jpg?v=1731247225", "Denim Horse Tee - Denim": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CT002030D_DENIM-3.jpg?v=1769410155", "Denim Double Waistband Skort - Denim": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/DPS001678W_DENIM-2.jpg?v=1748420885", "Welt Pocket Oversized Shirt - Burgundy": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/MB900607Y_BURGUNDY-3.jpg?v=1764923493", "Mandarin Boys Shirt - Navy Floral": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/KB800145W_NAVY_FLORAL_1.jpg?v=1736246095", "Linen Button Front Blouse": "https://cdn.shopify.com/s/files/1/0674/9015/2680/files/CB0000074H-BLUSH-3-copy.jpg?v=1731714671"};
+// up were removed: a stale entry showed the wrong photo for a live product, and a
+// product with no live match is better shown with no photo than with a guess.
 // Live image URLs from /api/insights (bestSellers.images), keyed by brand →
-// {productTitle: url}. Preferred over the hand-maintained IMG_* baselines.
+// {productTitle: url}. The only source of product photos.
 const LIVE_IMG={};
-function imgOf(n){const live=LIVE_IMG[state.brand];if(live&&live[n])return live[n];
-  return (({SG:IMG,MY:IMG_MY,TRTSG:IMG_TRTSG,TRTMY:IMG_TRTMY})[state.brand]||{})[n]||"";}
-// Live category mix from /api/insights (SKU-prefix map), keyed by brand →
-// {year: {category: gross}}. Takes precedence over the baseline constants.
+function imgOf(n){const live=LIVE_IMG[state.brand];return (live&&live[n])||"";}
+
+// Live category mix from /api/insights (Shopify product_type), keyed by brand →
+// {year: {category: gross}}. The only source — there is no baseline to fall back to.
 const LIVE_CATREV={};
 function catOf(){return LIVE_CATREV[state.brand]||({SG:CAT_REV,MY:CAT_REV_MY,TRTSG:CAT_REV_TRTSG,TRTMY:CAT_REV_TRTMY,SANSSG:CAT_REV_SANSSG,SANSMY:CAT_REV_SANSMY,MONOSG:CAT_REV_MONOSG,MONOMY:CAT_REV_MONOMY})[state.brand]||null;}
 
@@ -600,8 +607,11 @@ function renderFulfillment(){
   const panel=document.getElementById("fcfPanel");if(!panel||panel.style.display==="none")return;
   const body=document.getElementById("fcfBody"),foot=document.getElementById("fcfFoot");
   const pd=PICKUP_DELIVERY[state.brand],pdDummy=false;
-  if(!pd){document.getElementById("fcfDesc").textContent="";body.innerHTML='<div class="empty">Pick-up vs delivery data isn\u2019t loaded for '+B().name+' yet.</div>';foot.textContent="";return;}
-  document.getElementById("fcfDesc").textContent=B().name+" \u00b7 order fulfilment split \u00b7 live order pull ("+int(pd.pickup+pd.delivery)+" orders in range)"+(extrasOf().fulfillmentTruncated?" \u00b7 partial \u2014 order-page cap reached":"")+".";
+  // No section = not loaded. A section with zero countable orders is a real answer but
+  // NOT a percentage \u2014 0/0 would render as "100% self-pickup", which is invented.
+  if(!pd||(pd.pickup+pd.delivery)<=0){document.getElementById("fcfDesc").textContent="";body.innerHTML='<div class="empty">'+(pd?'No orders in the selected range for '+B().name+'.':'Pick-up vs delivery data isn\u2019t loaded for '+B().name+' yet.')+'</div>';foot.textContent="";return;}
+  // No "partial" caveat: the endpoint serves the whole window or no section at all.
+  document.getElementById("fcfDesc").textContent=B().name+" \u00b7 order fulfilment split \u00b7 live order pull ("+int(pd.pickup+pd.delivery)+" orders in range).";
   const AC_=AC(),tot=pd.pickup+pd.delivery,dp=tot?pd.delivery/tot*100:0,pp=tot?pd.pickup/tot*100:0,PUC="#8A8172";
   const H=t=>`<div style="font-size:10.5px;letter-spacing:.16em;text-transform:uppercase;color:var(--muted);font-weight:700;margin:0 0 14px">${t}</div>`;
   const fcfCard=(label,val,sub,clr,accent)=>`<div style="flex:1;min-width:160px;background:var(--surface);border:1px solid ${accent?"var(--accent)":"var(--line)"};border-radius:16px;padding:18px 20px;box-shadow:${accent?"0 0 0 1px var(--accent),var(--shadow)":"var(--shadow)"}"><div style="font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);font-weight:600">${label}</div><div style="font-family:'Fraunces',serif;font-weight:600;font-size:28px;margin-top:8px;color:${clr}">${val}</div><div style="font-size:12px;color:var(--muted);margin-top:5px">${sub}</div></div>`;
@@ -697,15 +707,15 @@ function buildKPIs(){
   {if(state.brand!=="SGALL"&&state.brand!=="MYALL"&&state.brand!=="GROUP"){const c=document.createElement("div");c.className="kpi"+(state.metric==="salemix"?" active":"");c.dataset.metric="salemix";
     c.innerHTML='<div class="lbl">Sale vs Full-Price</div><div class="val" style="font-size:19px">Split</div><div class="sub">SKU · units · revenue</div><div class="chip flat">view ▸</div><div class="barline"></div>';
     c.onclick=()=>selectMetric("salemix");host.appendChild(c);}}
-  if(PICKUP_DELIVERY[state.brand]){const pd=PICKUP_DELIVERY[state.brand],tot=pd.pickup+pd.delivery,dp=tot?pd.delivery/tot*100:0;
+  if(PICKUP_DELIVERY[state.brand]&&(PICKUP_DELIVERY[state.brand].pickup+PICKUP_DELIVERY[state.brand].delivery)>0){const pd=PICKUP_DELIVERY[state.brand],tot=pd.pickup+pd.delivery,dp=tot?pd.delivery/tot*100:0;
     const c=document.createElement("div");c.className="kpi"+(state.metric==="fulfillment"?" active":"");c.dataset.metric="fulfillment";
     c.innerHTML='<div class="lbl">Pick-up vs Delivery</div><div class="val" style="font-size:21px">'+dp.toFixed(0)+'% <span style="font-size:13px;color:var(--muted)">delivery</span></div><div class="sub">'+(100-dp).toFixed(0)+'% self-pickup</div><div class="chip flat">view \u25b8</div><div class="barline"></div>';
     c.onclick=()=>selectMetric("fulfillment");host.appendChild(c);}
   else if(indivB){
-    // The fulfilment split arrives via the deferred full-orders pull (phase 2) —
-    // same shimmer-vs-pending distinction as Best Sellers, on its own flag.
+    // The fulfilment split arrives via its own deferred pull (phase 2a) — same
+    // shimmer-vs-pending distinction as Best Sellers, on its own flag.
     var _lo=(typeof isLiveBrand==="function"&&isLiveBrand(state.brand))?liveInfo(state.brand):null;
-    if(_lo&&!_lo.ordersExtrasDone&&!(_lo.settled&&!_lo.ok))loadingKpi("Pick-up vs Delivery","loading live orders…");
+    if(_lo&&!_lo.fulfillmentDone&&!(_lo.settled&&!_lo.ok))loadingKpi("Pick-up vs Delivery","loading live orders…");
     else blankKpi("Pick-up vs Delivery","delivery / self-pickup");
   }
 }
@@ -1013,7 +1023,8 @@ function renderCategory(){
   const yrs=Object.keys(cr).map(Number).sort((a,b)=>a-b);let y=catState.year;if(!cr[y])y=yrs[yrs.length-1];
   document.querySelectorAll("#catYear button").forEach(b=>{const has=!!cr[+b.dataset.y];b.style.display=has?"":"none";b.classList.toggle("on",+b.dataset.y===y);});
   const data=cr[y];
-  const entries=CATS.map(c=>({c,v:data[c]||0})).filter(x=>x.v>0).sort((a,b)=>b.v-a.v);
+  // Iterate the live data's own categories — never a fixed whitelist.
+  const entries=Object.keys(data).map(c=>({c,v:data[c]||0})).filter(x=>x.v>0).sort((a,b)=>b.v-a.v);
   const tot=entries.reduce((s,e)=>s+e.v,0);
   if(!tot){body.innerHTML='<div class="empty">No category revenue for '+y+'.</div>';return;}
   const PAL=[AC(),"#D98240","#5F72A8","#7FA98F","#C7A76B","#8A6A6A","#B0A08C","#6E8BA0"];
@@ -1036,16 +1047,13 @@ function renderCategory(){
   html+=`<div style="display:flex;gap:32px;align-items:center;flex-wrap:wrap"><div style="flex:0 0 auto;display:flex;justify-content:center;flex:1;min-width:220px">${pie}</div><div style="flex:2;min-width:280px">${legend}</div></div>`;
   body.innerHTML=html;
 }
-const SKU_CAT={KS:"Knit",KB:"Knit",CL:"Knit",TS:"Tops",BS:"Tops",JK:"Outerwear",VT:"Outerwear",CT:"Outerwear",SK:"Skirts",PQ:"Bottoms",PL:"Bottoms",PS:"Bottoms",DQ:"Dresses",TD:"Dresses",DR:"Dresses"};
-function catFromName(n){n=(n||"").toLowerCase();
-  if(/skort|skirt/.test(n))return "Skirts";
-  if(/dress/.test(n))return "Dresses";
-  if(/blazer|jacket|vest|coat|outer|trench/.test(n))return "Outerwear";
-  if(/knit|cardigan|sweater|jumper/.test(n))return "Knit";
-  if(/pant|trouser|culott|short|jean|legging|denim/.test(n))return "Bottoms";
-  if(/top|blouse|tee|shirt|cami|bodysuit|polo/.test(n))return "Tops";
-  return "Other";}
-function itemCat(r){const sku=(r[4]||""),code=sku.slice(2,4).toUpperCase();return (sku&&SKU_CAT[code])?SKU_CAT[code]:catFromName(r[0]);}
+// Category for a best-seller row. The ONLY source is Shopify's own product_type,
+// carried on the row by /api/insights (index 5). The SKU-prefix table and the
+// guess-from-the-product-title function that used to sit here were removed: both
+// invented a category the store never recorded. A product Shopify has no
+// product_type for is grouped honestly, not assigned one.
+const NO_CATEGORY="No category set in Shopify";
+function itemCat(r){const t=(r&&r[5]!=null)?String(r[5]).trim():"";return t||NO_CATEGORY;}
 function renderCategoryBest(){
   const panel=document.getElementById("catBestPanel");if(!panel||panel.style.display==="none")return;
   const body=document.getElementById("catBestBody");
@@ -1188,12 +1196,13 @@ function getVoucherUnit(){
   return null; // no shipped voucher report for this store — the tab shows an honest empty state
 }
 var CHCOLOR={Website:'#2f8f5b',Shopee:'#ee4d2d',Lazada:'#1a5cb0'};
-var VHOLIDAYS={Singapore:{2026:{5:{1:'Vesak Day (obs)'}}},Malaysia:{2026:{5:{1:"Agong's Birthday \u00b7 Wesak (obs)",17:'Awal Muharram'}}}};
+// Public-holiday annotations on this calendar were hand-typed (and covered only a
+// couple of 2026 months), so they were removed along with the rest of the
+// non-API content. Only the promotions Shopify actually recorded are plotted.
 function voucherDayCal(U,vY,vM,T){
   var rows=U.rows||[];
   if(!rows.length)return '';
-  var regionName=(U.store&&/Malaysia|MY/i.test(U.store.region))?'Malaysia':'Singapore';
-  var hols=((VHOLIDAYS[regionName]||{})[vY]||{})[vM]||{};
+  var hols={};   // no live public-holiday source is wired up — annotate nothing
   var dows=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
   var first=new Date(vY,vM,1).getDay(), ndays=new Date(vY,vM+1,0).getDate();
   var vs=rows.filter(function(v){return !v.target&&!v.pending;}).map(function(v){
@@ -1419,7 +1428,7 @@ function renderDiscount(){
   const panel=document.getElementById("discPanel");if(!panel||panel.style.display==="none")return;
   const body=document.getElementById("discBody"),foot=document.getElementById("discFoot");
   if(discChart){discChart.destroy();discChart=null;}
-  const bkey=state.brand,B_=B(),partial=DISC_PARTIAL[bkey];
+  const bkey=state.brand,B_=B();
   const hasYear=y=>!!((DISC_MONTHLY[bkey]&&DISC_MONTHLY[bkey][y])||(DISCOUNTS[bkey]&&DISCOUNTS[bkey][y]));
   const yrsAvail=[2024,2025,2026].filter(hasYear);
   if(!yrsAvail.length){body.innerHTML=renderVoucherDeck();foot.textContent="";
@@ -1442,23 +1451,10 @@ function renderDiscount(){
   const vSum=vou?vou.reduce((s,v)=>s+(v||0),0):null,oSum=ord?ord.reduce((s,v)=>s+(v||0),0):null;
   const vPct=(vSum!=null&&oSum)?vSum/oSum*100:null;
   const AC_=AC();
-  const mech=(name,type)=>{const k=(name||"").toUpperCase().trim();return DISC_MECH[k]||(/[$%]|FOR |OFF|BUY|FREE|GET/.test(k)?name:(type==="auto"?"Automatic offer":"Discount code"));};
-  const deriveMech=(name)=>{const U=String(name||"").toUpperCase();let m;
-    if(m=U.match(/(\d+)\s*FOR\s*(\$|RM)\s*(\d+(?:\.\d+)?)/))return m[1]+" items for "+(m[2]==="RM"?"RM":"$")+m[3];
-    if(m=U.match(/BUY\s*(\d+)[^%$]*?GET\s*(\d+)\s*%\s*OFF/))return "Buy "+m[1]+", get "+m[2]+"% off";
-    if(m=U.match(/BUY\s*(\d+)[^%]*?GET\s*(\$|RM)\s*(\d+)\s*OFF/))return "Buy "+m[1]+", get "+(m[2]==="RM"?"RM":"$")+m[3]+" off";
-    if(m=U.match(/(\d+)\s*%\s*OFF/)){let o=m[1]+"% off",mm=U.match(/(?:MIN|ABOVE)\D*(\$|RM)?\s*(\d+)/);if(mm)o+=" \u00b7 min "+(mm[1]||"$")+mm[2];return o;}
-    if(m=U.match(/(\$|RM)\s*(\d+(?:\.\d+)?)\s*OFF/)){let c=m[1]==="RM"?"RM":"$",o=c+m[2]+" off",mm=U.match(/(?:MIN|ABOVE)\D*(\$|RM)?\s*(\d+)/);if(mm)o+=" \u00b7 min "+(mm[1]||c)+mm[2];return o;}
-    if(m=U.match(/SAVE\s*(\$|RM)?\s*(\d+(?:\.\d+)?)/))return "Save "+(m[1]||"$")+m[2];
-    return "";};
-  const cleanMech=(name,type)=>{const k=(name||"").toUpperCase().trim();
-    if(/PWP|GWP|TOTE BAG|SHOPPER BAG|ORIGAMI BAG|GIFT CARD|E-GIFT|FREE GIFT/.test(k))return "Purchase-with-purchase gift";
-    const isIora=(bkey==="SG"||bkey==="MY");
-    let m=(isIora?DISC_MECH[k]:"")||deriveMech(name)||"";
-    m=m.replace(/^\s*(automatic(\s+offer)?|discount\s+code)\s*[\u00b7:\-]\s*/i,"").trim();
-    if(!m||/^(automatic(\s+offer)?|discount\s+code)$/i.test(m))return type==="auto"?"Automatic offer":"Code discount";
-    if(m.toUpperCase().replace(/[^A-Z0-9]/g,"")===k.replace(/[^A-Z0-9]/g,""))return "";
-    return m;};
+  /* What the code gives the customer — Shopify's configured discount, nothing else.
+     The local table and the two name-parsing guessers that used to sit here were
+     removed; a code the API has no terms for now falls back to naming its type only. */
+  const cleanMech=(name,type)=>promoTermsText(name,bkey)||(type==="auto"?"Automatic offer":"Code discount");
   const H=t=>`<h2 style="font-family:'Fraunces',serif;font-weight:600;font-size:20px;letter-spacing:-.01em">${t}</h2>`;
   const cardBox=(label,val,sub,accent)=>`<div style="flex:1;min-width:180px;background:var(--surface);border:1px solid ${accent?'var(--accent)':'var(--line)'};border-radius:16px;padding:18px 20px;box-shadow:${accent?'0 0 0 1px var(--accent),var(--shadow)':'var(--shadow)'}"><div style="font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);font-weight:600">${label}</div><div style="font-family:'Fraunces',serif;font-weight:600;font-size:28px;margin-top:8px;letter-spacing:-.01em;color:${accent?'var(--accent)':'var(--ink)'}">${val}</div>${sub?`<div style="font-size:12px;color:var(--muted);margin-top:5px">${sub}</div>`:''}</div>`;
   const allMap={};
@@ -1486,7 +1482,7 @@ function renderDiscount(){
   {const ms=body.querySelector("#discMonthSel");if(ms)ms.onchange=()=>{if(ms.value==="all"){discState.mode="year";}else{discState.mode="month";discState.month=+ms.value;}renderDiscount();};}
   body.querySelectorAll("#discMode button").forEach(b=>b.onclick=()=>{discState.mode=b.dataset.v;renderDiscount();});
   body.querySelectorAll("#discYear button").forEach(b=>b.onclick=()=>{discState.year=+b.dataset.y;renderDiscount();});
-  foot.textContent=partial?"Headline figures \u2014 automatic + code breakdown pending a full Shopify pull for "+B_.name+".":"";
+  foot.textContent="";
 }
 function renderDiscountMonthly(){
   const body=document.getElementById("discBody"),foot=document.getElementById("discFoot");
@@ -1524,7 +1520,7 @@ function renderDiscountMonthly(){
     const rank=idx.slice().sort((a,b)=>disA[b]-disA[a]).indexOf(fm)+1;
     addTile(tl,"Discount Given ("+MONTHS[fm]+" "+y+")",moneyP(disA[fm]),"rank #"+rank+" of "+idx.length+" months");
     addTile(tl,"% of Revenue",revA[fm]?(disA[fm]/revA[fm]*100).toFixed(1)+"%":"–","discount ÷ revenue");
-    addTile(tl,"Code Orders",hasV?int(vouA[fm]||0):"–",hasV?"orders using a code":"pending Shopify pull");
+    addTile(tl,"Code Orders",(hasV&&vouA[fm]!=null)?int(vouA[fm]):"–",(hasV&&vouA[fm]!=null)?"orders using a code":"pending Shopify pull");
     addTile(tl,"Code-order %",(hasV&&ordA[fm])?((vouA[fm]||0)/ordA[fm]*100).toFixed(1)+"%":"–","of "+(ordA[fm]!=null?int(ordA[fm]):"–")+" orders");
   }
   const sel=document.getElementById("discMonth");if(sel)sel.onchange=()=>{discState.month=sel.value===""?null:+sel.value;renderDiscount();};
@@ -1552,7 +1548,7 @@ function renderDiscountMonthly(){
   const hasDM=!!dmY&&showIdx.some(i=>topOf(i));
   const topCell=i=>{const t=topOf(i);return t?'<td><span style="font-weight:600">'+t[0]+'</span> '+TYPE_BADGE(t[4])+' <span style="color:var(--muted);font-size:11.5px">'+moneyP(t[1])+' · '+int(t[2])+' ord</span></td>':'<td style="color:var(--muted)">–</td>';};
   let head='<thead><tr><th>Month</th><th>Discount Given</th><th>% of Revenue</th>'+(hasV?'<th>Code Orders</th><th>Code-order %</th>':'<th>Orders</th>')+(hasDM?'<th>Best Performing Discount</th>':'')+'</tr></thead><tbody>';
-  let bd=showIdx.map(i=>'<tr'+(i===fm?' class="total"':'')+'><td>'+MONTHS[i]+' '+y+'</td><td>'+moneyP(disA[i])+'</td><td>'+(revA[i]?(disA[i]/revA[i]*100).toFixed(1)+'%':'–')+'</td>'+(hasV?'<td>'+int(vouA[i]||0)+'</td><td>'+(ordA[i]?((vouA[i]||0)/ordA[i]*100).toFixed(1)+'%':'–')+'</td>':'<td>'+(ordA[i]!=null?int(ordA[i]):'–')+'</td>')+(hasDM?topCell(i):'')+'</tr>').join("");
+  let bd=showIdx.map(i=>'<tr'+(i===fm?' class="total"':'')+'><td>'+MONTHS[i]+' '+y+'</td><td>'+moneyP(disA[i])+'</td><td>'+(revA[i]?(disA[i]/revA[i]*100).toFixed(1)+'%':'–')+'</td>'+(hasV?'<td>'+(vouA[i]!=null?int(vouA[i]):'–')+'</td><td>'+((ordA[i]&&vouA[i]!=null)?(vouA[i]/ordA[i]*100).toFixed(1)+'%':'–')+'</td>':'<td>'+(ordA[i]!=null?int(ordA[i]):'–')+'</td>')+(hasDM?topCell(i):'')+'</tr>').join("");
   if(fm==null){const aTop=(DISCOUNTS[state.brand]&&DISCOUNTS[state.brand][y])?DISCOUNTS[state.brand][y].slice().sort((a,b)=>b[1]-a[1])[0]:null;
     bd+='<tr class="total"><td>TOTAL ('+y+')</td><td>'+moneyP(totGiven)+'</td><td>'+(totRev?(totGiven/totRev*100).toFixed(1)+'%':'–')+'</td>'+(hasV?'<td>'+int(totVou)+'</td><td>'+(totOrd?(totVou/totOrd*100).toFixed(1)+'%':'–')+'</td>':'<td>'+int(totOrd)+'</td>')+(hasDM?(aTop?'<td><span style="font-weight:600">'+aTop[0]+'</span> '+TYPE_BADGE(aTop.length>=5?aTop[4]:discType(aTop[0]))+' <span style="color:var(--muted);font-size:11.5px">top for year</span></td>':'<td></td>'):'')+'</tr>';}
   document.getElementById("discTable").innerHTML=head+bd+'</tbody>';
@@ -2062,7 +2058,7 @@ function renderCompare(){
     const totOrders=k=>{const a=BRANDS[k].ord&&BRANDS[k].ord[y];if(!a)return null;const v=a.filter(x=>x!=null);return v.length?v.reduce((p,c)=>p+c,0):null;};
     let rows=mems.map(m=>{const tbl=(DISCOUNTS[m[1]]||{})[y];if(!tbl||!tbl.length)return{name:m[0],key:m[1],ok:false};
       let drev=0,dord=0;tbl.forEach(r=>{drev+=r[1]||0;dord+=r[2]||0;});const to=totOrders(m[1]);
-      return{name:m[0],key:m[1],ok:true,drev,dord,to,vp:(to&&to>0)?dord/to*100:null,partial:!!DISC_PARTIAL[m[1]]};});
+      return{name:m[0],key:m[1],ok:true,drev,dord,to,vp:(to&&to>0)?dord/to*100:null};});
     const valid=rows.filter(r=>r.ok).sort((a,b)=>b.drev-a.drev),miss=rows.filter(r=>!r.ok);
     if(!valid.length){body.innerHTML='<div class="empty">No discount-code data for '+y+'.</div>';foot.textContent="";return;}
     const top=valid[0],last=valid[valid.length-1];
@@ -2072,11 +2068,11 @@ function renderCompare(){
     let html=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:24px"><div style="background:${tSoft};border:1px solid ${tAcc};border-radius:16px;padding:16px 18px;box-shadow:0 0 0 1px ${tAcc},var(--shadow)"><div style="font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700">\u2191 Most discount revenue</div><div style="font-family:'Fraunces',serif;font-size:21px;font-weight:600;margin-top:8px;color:${tAcc}">${top.name}</div><div style="font-size:14px;color:${tAcc};font-weight:700;margin-top:3px">${money(top.drev)}</div><div style="font-size:11.5px;color:var(--muted);margin-top:2px">${int(top.dord)} discounted orders</div></div><div style="background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px 18px;box-shadow:var(--shadow)"><div style="font-size:10.5px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);font-weight:700">\u2193 Least</div><div style="font-family:'Fraunces',serif;font-size:21px;font-weight:600;margin-top:8px;color:${lAcc}">${last.name}</div><div style="font-size:14px;color:var(--muted);font-weight:700;margin-top:3px">${money(last.drev)}</div><div style="font-size:11.5px;color:var(--muted);margin-top:2px">${int(last.dord)} discounted orders</div></div></div>`;
     const dgc='grid-template-columns:30px 1fr 118px 74px 128px;gap:12px';
     html+=`<div style="display:grid;${dgc};align-items:center;font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:700;padding-bottom:8px;border-bottom:1px solid var(--line)"><div>#</div><div>Brand</div><div style="text-align:right">Discounted orders</div><div style="text-align:right">Voucher %</div><div style="text-align:right">Revenue from disc.</div></div>`;
-    valid.forEach((r,i)=>{const rAcc=accOf(r.key);html+=`<div style="display:grid;${dgc};align-items:center;padding:11px 0;border-bottom:1px solid var(--line)"><div style="width:24px;height:24px;border-radius:50%;background:${rAcc};color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">${i+1}</div><div style="font-weight:700;font-size:13.5px;color:${rAcc}">${r.name}${r.partial?' <span style="color:var(--muted);font-weight:700">*</span>':''}</div><div style="text-align:right;font-weight:700;font-size:13.5px">${int(r.dord)}</div><div style="text-align:right;font-size:13px;color:var(--muted)">${r.vp==null?"\u2014":r.vp.toFixed(1)+"%"}</div><div style="text-align:right;font-weight:700;font-size:13.5px">${money(r.drev)}</div></div>`;});
+    valid.forEach((r,i)=>{const rAcc=accOf(r.key);html+=`<div style="display:grid;${dgc};align-items:center;padding:11px 0;border-bottom:1px solid var(--line)"><div style="width:24px;height:24px;border-radius:50%;background:${rAcc};color:#fff;font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center">${i+1}</div><div style="font-weight:700;font-size:13.5px;color:${rAcc}">${r.name}</div><div style="text-align:right;font-weight:700;font-size:13.5px">${int(r.dord)}</div><div style="text-align:right;font-size:13px;color:var(--muted)">${r.vp==null?"\u2014":r.vp.toFixed(1)+"%"}</div><div style="text-align:right;font-weight:700;font-size:13.5px">${money(r.drev)}</div></div>`;});
     miss.forEach(r=>{html+=`<div style="display:grid;${dgc};align-items:center;padding:11px 0;border-bottom:1px solid var(--line);opacity:.5"><div>\u2013</div><div style="font-weight:600;font-size:13.5px">${r.name}</div><div style="text-align:right">\u2014</div><div style="text-align:right">\u2014</div><div style="text-align:right">\u2014</div></div>`;});
     html+=`<div style="display:grid;${dgc};align-items:center;padding:14px 0 2px;margin-top:16px;border-top:2px solid var(--ink);font-weight:800"><div></div><div>ALL BRANDS</div><div style="text-align:right">${int(tOrd)}</div><div style="text-align:right">${tVp==null?"\u2014":tVp.toFixed(1)+"%"}</div><div style="text-align:right">${money(tRev)}</div></div>`;
     body.innerHTML=html;
-    foot.innerHTML=y+" \u00b7 discounted orders = orders that redeemed a discount code \u00b7 voucher % = discounted orders \u00f7 total orders \u00b7 revenue from disc. = sales on those orders \u00b7 "+CUR.code+"."+(valid.some(r=>r.partial)?' &nbsp;<b>*</b> headline code(s) only \u2014 full table pending, so those totals are conservative.':'');
+    foot.innerHTML=y+" \u00b7 discounted orders = orders that redeemed a discount code \u00b7 voucher % = discounted orders \u00f7 total orders \u00b7 revenue from disc. = sales on those orders \u00b7 "+CUR.code+".";
     return;
   }
   // ===== STANDARD METRICS: ranking only (top / lowest / ranked list / total) \u2014 no revenue/AOV table =====
@@ -2290,202 +2286,54 @@ function renderFunnel(){
 }
 const SALEMIX={}; // {sku:{sale,full},[year]:{revSale,revFull,itemSale,itemFull}} — price-based markdown split from the live order pull
 let saleState={view:"sku",year:2025,period:"all"};
-/* ---- Shared promotion title + mechanics helpers -------------------------------
-   Turn a raw Shopify discount name ("MEGASAVE10", "2 FOR $29.90", "Buy 2, get
-   RM20 off") into a readable title plus a plain-English mechanic. Uses the
-   curated DISC_MECH table where we have one, otherwise parses the name itself. */
+/* ---- Promotion title + terms, entirely from Shopify --------------------------
+   What a promotion GIVES the customer is read from the discount the merchant
+   configured in Shopify (/api/insights -> sections.discounts.terms, sourced from
+   codeDiscountNodeByCode). Everything that used to stand in for that is gone:
+   a hand-written code->mechanic table, a parser that guessed terms from the code's
+   letters, and an inference that reverse-engineered an amount or a "~20% off" from
+   average discount per order. None of it was verified by anything. A code Shopify
+   has no discount for now shows no terms at all. */
+var LIVE_TERMS={};                         // brand -> { CODE: {kind, amount, ...} }
+function termsFor(name,bkey){
+  var t=LIVE_TERMS[bkey||state.brand];if(!t)return null;
+  var raw=String(name||"").trim();
+  return t[raw]||t[raw.toUpperCase()]||null;
+}
+function promoCurSym(bkey){try{var b=(typeof BRANDS!=="undefined")&&BRANDS[bkey];return (b&&b.cur&&b.cur.sym)||"$";}catch(e){return "$";}}
+/* Compose the configured terms into one line. Every number below is Shopify's; the
+   only local content is the punctuation and the words joining them. */
+function promoTermsText(name,bkey){
+  var t=termsFor(name,bkey);if(!t)return "";
+  var sym=promoCurSym(bkey),parts=[];
+  var amt=function(v){return sym+((v%1===0)?String(v):String(Math.round(v*100)/100));};
+  if(t.buyQuantity!=null&&t.getQuantity!=null)parts.push("Buy "+t.buyQuantity+", get "+t.getQuantity);
+  if(t.kind==="freeShipping")parts.push("Free shipping");
+  else if(t.percentage!=null)parts.push(t.percentage+"% off"+(t.appliesOnEachItem?" each item":""));
+  else if(t.amount!=null)parts.push(amt(t.amount)+" off"+(t.appliesOnEachItem?" each item":""));
+  if(t.minSubtotal!=null)parts.push("min "+amt(t.minSubtotal));
+  if(t.minQuantity!=null)parts.push("min "+t.minQuantity+" items");
+  if(t.oncePerCustomer)parts.push("1 use/customer");
+  else if(t.usageLimit!=null)parts.push(t.usageLimit+" uses total");
+  return parts.join(" \u00b7 ");
+}
+function promoMechOf(name,type,bkey){return promoTermsText(name,bkey);}
+/* Display name. Shopify's own discount title when it has one, otherwise the name as
+   the API returned it — no reconstruction of words out of the code's letters. */
 function promoTitle(name,type){
   var t=String(name||"").trim().replace(/\s+/g," ");
-  if(!t)return (type==="auto")?"Automatic offer":"Promotion";
-  if(t.indexOf(" ")<0)return /^[A-Za-z0-9._%$+-]+$/.test(t)?t.toUpperCase():t;   // bare code — show as entered at checkout
-  if(t===t.toUpperCase()){                             // all-caps description — ease off the shouting
-    t=t.toLowerCase().replace(/(^|[\s(\/\-\u2013])([a-z])/g,function(m,a,c){return a+c.toUpperCase();});
-    t=t.replace(/\brm(?=\d)/gi,"RM").replace(/\b(sg|my|uk|us|ae|gwp|pwp|cny|bfcm)\b/gi,function(m){return m.toUpperCase();});
-    t=t.replace(/\bFor\b/g,"for").replace(/\bOff\b/g,"off").replace(/\bAbove\b/g,"above").replace(/\bAnd\b/g,"and").replace(/\bGet\b/g,"get").replace(/\bOn\b/g,"on").replace(/\bAll\b/g,"all").replace(/\bItems\b/g,"items").replace(/\bItem\b/g,"item");
-  }
-  return t;
-}
-function promoDeriveMech(name){
-  var U=String(name||"").toUpperCase(),m,minOf=function(dflt){var mm=U.match(/(?:MIN|ABOVE|OVER|SPEND)\D{0,6}(\$|RM)?\s*(\d+(?:\.\d+)?)/)||U.match(/(\$|RM)\s*(\d+)\s*(?:&|AND)\s*ABOVE/);return mm?(" \u00b7 min "+(mm[1]||dflt||"$")+mm[2]):"";};
-  if(m=U.match(/(\d+)\s*(?:FOR|@)\s*(\$|RM)\s*(\d+(?:\.\d+)?)/))return m[1]+" items for "+(m[2]==="RM"?"RM":"$")+m[3];
-  if(m=U.match(/BUY\s*(\d+)[^%$]*?GET\s*(\d+)\s*%\s*OFF/))return "Buy "+m[1]+", get "+m[2]+"% off";
-  if(m=U.match(/BUY\s*(\d+)[^%]*?GET\s*(\$|RM)\s*(\d+)\s*OFF/))return "Buy "+m[1]+", get "+(m[2]==="RM"?"RM":"$")+m[3]+" off";
-  if(m=U.match(/(\d+)\s*ITEMS?\s*[\-\u2013\u00b7]?\s*(\d+)\s*%\s*OFF/))return m[2]+"% off "+m[1]+"+ items";
-  if(m=U.match(/(\d+)\s*%\s*OFF/))return m[1]+"% off"+minOf();
-  if(m=U.match(/(\$|RM)\s*(\d+(?:\.\d+)?)\s*OFF/)){var c=(m[1]==="RM")?"RM":"$";return c+m[2]+" off"+minOf(c);}
-  if(m=U.match(/SAVE\s*(\$|RM)\s*(\d+(?:\.\d+)?)/))return "Save "+(m[1]==="RM"?"RM":"$")+m[2]+minOf(m[1]);
-  return "";
-}
-/* Categorical fallbacks — only used when neither the configured mechanic nor the
-   promotion's own numbers give us a concrete figure. */
-function promoDeriveKind(name){
-  var U=String(name||"").toUpperCase();
-  if(/FREE\s*(SHIP|DELIVER)/.test(U))return "Free shipping";
-  if(/CASHBACK|REBATE/.test(U))return "Cashback / rebate";
-  if(/BUNDLE|PERFECT PAIR|\bPAIR\b|MULTI\s*BUY/.test(U))return "Bundle / multi-buy deal";
-  if(/\bTIER\s*\d|TIERED/.test(U))return "Tiered spend threshold";
-  if(/MEMBER|SILVER|GOLD|\bVIP\b|LOYALTY/.test(U))return "Member-exclusive offer";
-  if(/CLEARANCE|MARKDOWN|FINAL SALE/.test(U))return "Clearance markdown";
-  if(/\bFIRST\b|NEWCUST|WELCOME/.test(U))return "First-order welcome offer";
-  return "";
-}
-/* Which brands actually run each code. DISC_MECH was written against iORA, and the
-   same code name means different things elsewhere (FIRST is $3 off at iORA SG but
-   $5 at TRT SG and $8 at SANS SG), so a curated mechanic is only reused outside
-   iORA when that code belongs to one brand alone. */
-/* Campaign titles. Shopify only stores a discount *name* — for code promotions
-   that name IS the code, so a readable title is reconstructed from the code's
-   words (HELLOJAN12 -> "Hello January"). Type the real campaign title here and
-   it wins outright:  PROMO_TITLE_BRAND.SG={"HELLOJAN12":"New Year Hello"};      */
-const PROMO_TITLE_BRAND={};
-var PROMO_WORDS=[
-  ["JANUARY","January"],["JAN","January"],["FEBRUARY","February"],["FEB","February"],["MARCH","March"],["MAR","March"],
-  ["APRIL","April"],["APR","April"],["MAY","May"],["JUNE","June"],["JUN","June"],["JULY","July"],["JUL","July"],
-  ["AUGUST","August"],["AUG","August"],["SEPTEMBER","September"],["SEPT","September"],["SEP","September"],
-  ["OCTOBER","October"],["OCT","October"],["NOVEMBER","November"],["NOV","November"],["DECEMBER","December"],["DEC","December"],
-  ["BLACKFRIDAY","Black Friday"],["BLACKCYBER","Black Friday & Cyber Monday"],["BFCM","Black Friday & Cyber Monday"],
-  ["BLKF","Black Friday"],["CYBER","Cyber Monday"],["MERDEKA","Merdeka"],["DEEPAVALI","Deepavali"],["VESAK","Vesak"],
-  ["MSIADAY","Malaysia Day"],["SUPERWOMAN","Superwoman"],["VALENTINES","Valentine\u2019s"],["VALENTINE","Valentine\u2019s"],
-  ["MOTHERS","Mother\u2019s Day"],["MOTHER","Mother\u2019s Day"],["FATHERS","Father\u2019s Day"],["FATHER","Father\u2019s Day"],
-  ["CHRISTMAS","Christmas"],["XMAS","Christmas"],["YEAREND","Year End"],["NEWYEAR","New Year"],["MIDYEAR","Mid-Year"],
-  ["FESTIVE","Festive"],["PAYDAY","Payday"],["WEEKEND","Weekend"],["LABOUR","Labour Day"],["LABOR","Labour Day"],
-  ["RAYA","Raya"],["HUAT","Huat"],["CNY","CNY"],["NDP","National Day"],["IWD","Women\u2019s Day"],
-  ["MEGASAVE","Mega Save"],["SAVENOW","Save Now"],["CARTNOW","Cart Now"],["MEGADEAL","Mega Deal"],["MIDMONTH","Mid-Month"],
-  ["THANKYOU","Thank You"],["THANKU","Thank You"],["MISSYOU","We Miss You"],["MISSU","We Miss You"],
-  ["EXCLUSIVE","Exclusive"],["CLEARANCE","Clearance"],["BUNDLE","Bundle"],["WELCOME","Welcome"],["BACKUP","Back-Up"],
-  ["SPECIAL","Special"],["STEALS","Steals"],["DOUBLE","Double-Day"],["PERKS","Perks"],["GIVING","Giving"],
-  ["FLASH","Flash Sale"],["TREAT","Treat"],["PARTY","Party"],["FIRST","First Order"],["MAGIC","Magic"],["CLICK","Click"],
-  ["DEALS","Deals"],["DEAL","Deal"],["SAVE","Save"],["MEGA","Mega"],["HELLO","Hello"],["BONUS","Bonus"],["CART","Cart"],
-  ["SALE","Sale"],["JOY","Joy"],["HUNT","Hunt"],["BIG","Big"],["NOW","Now"],["GET","Get"],["OFF",null],["ONLY",null],
-  ["HAPPINESS","Happiness"],["RECONNECT","Reconnect"],["SURPRISE","Surprise"],["MADNESS","Madness"],["STOCKUP","Stock Up"],
-  ["RESTOCK","Restock"],["WARDROBE","Wardrobe"],["KICKOFF","Kick-off"],["MEMBERS","Members\u2019"],["MEMBER","Member"],
-  ["SUMMER","Summer"],["SAVER","Saver"],["ONLINE","Online"],["RETURN","Win-Back"],["EXTRA","Extra"],["LUCKY","Lucky"],
-  ["SUPER","Super"],["ULTRA","Ultra"],["FRESH","Fresh"],["BLOOM","Bloom"],["SHINE","Shine"],["CHEER","Cheer"],
-  ["COMBO","Combo"],["SHOP","Shop"],["LEAP","Leap Day"],["LOVE","Love"],["MID","Mid-Month"],["TIER","Tier"],
-  ["GOLD","Gold"],["SILVER","Silver"],["RETAIL","Retail"],["STYLE","Style"],["LOOK","Look"],["PAIR","Pair"],
-  ["DUO","Duo"],["SET","Set"],["NEW","New"],["BACK","Back"],["END","End"],["PRE","Pre-Sale"],["TOP","Top"],["FUN","Fun"]
-];
-PROMO_WORDS.sort(function(a,b){return b[0].length-a[0].length;});
-/* Greedy word match. Bails out rather than guessing if any letters are unrecognised,
-   so opaque codes (STV1A, 88MDMTH) keep showing as the code itself. */
-function promoTitleFromCode(k){
-  var s=String(k||"").toUpperCase().replace(/[^A-Z0-9]/g,""),parts=[],i=0,gotWord=false,skipped=0;
-  while(i<s.length){
-    if(s.charCodeAt(i)>=48&&s.charCodeAt(i)<=57){while(i<s.length&&s.charCodeAt(i)>=48&&s.charCodeAt(i)<=57)i++;continue;}
-    var hit=null;
-    for(var w=0;w<PROMO_WORDS.length;w++)if(s.substr(i,PROMO_WORDS[w][0].length)===PROMO_WORDS[w][0]){hit=PROMO_WORDS[w];break;}
-    if(!hit){
-      /* one stray letter is allowed: a brand prefix at the front, or a lone trailing letter */
-      var lone=(i+1>=s.length)||(s.charCodeAt(i+1)>=48&&s.charCodeAt(i+1)<=57);
-      if(!skipped&&(i===0||lone)){skipped=1;i++;continue;}
-      return "";
-    }
-    i+=hit[0].length;
-    if(hit[1]){gotWord=true;if(parts[parts.length-1]!==hit[1])parts.push(hit[1]);}
-  }
-  if(!gotWord)return "";
-  var t=parts.join(" ").trim();
-  return t.length>2?t:"";
+  if(t)return t;
+  return (String(type||"").toLowerCase()==="auto")?"Automatic offer":"Promotion";
 }
 /* One promotion, split into the three things the card shows. */
 function promoEntry(name,type,bkey){
   var raw=String(name||"").trim(),k=raw.toUpperCase();
   var isCode=(String(type||"").toLowerCase()==="code")||(raw.indexOf(" ")<0&&String(type||"").toLowerCase()!=="auto");
-  var ovr=(typeof PROMO_TITLE_BRAND!=="undefined"&&PROMO_TITLE_BRAND[bkey])?PROMO_TITLE_BRAND[bkey][k]:null;
-  var title=ovr||(isCode?promoTitleFromCode(k):"")||promoTitle(raw,type);
+  var live=termsFor(raw,bkey);
+  var title=(live&&live.title)?String(live.title).trim():promoTitle(raw,type);
   var code=isCode?k:"";
   var bare=function(x){return String(x||"").toUpperCase().replace(/[^A-Z0-9]/g,"");};
   return {title:title,code:code,showCode:!!(code&&bare(title)!==bare(code))};
-}
-/* Type the real configured mechanic here and it wins over everything else.
-   PROMO_MECH_BRAND[brandKey][CODE IN CAPS] = "what the customer gets"
-   Brand keys: SG, MY, TRTSG, TRTMY, SANSSG, SANSMY, MONOSG, MONOMY.
-   e.g. PROMO_MECH_BRAND.MONOSG={"MNQJUL0":"20% off \u00b7 1 use/customer"};        */
-const PROMO_MECH_BRAND={};
-var PROMO_OWNERS=null;
-function promoOwners(){
-  if(PROMO_OWNERS)return PROMO_OWNERS;
-  PROMO_OWNERS={};
-  var add=function(bk,nm){var k=String(nm||"").toUpperCase().trim();if(!k)return;(PROMO_OWNERS[k]=PROMO_OWNERS[k]||{})[bk]=1;};
-  try{
-    if(typeof DISC_MONTHLY!=="undefined")Object.keys(DISC_MONTHLY).forEach(function(bk){var d=DISC_MONTHLY[bk]||{};
-      Object.keys(d).forEach(function(y){(d[y]||[]).forEach(function(rows){(rows||[]).forEach(function(r){add(bk,r[0]);});});});});
-    if(typeof DISCOUNTS!=="undefined")Object.keys(DISCOUNTS).forEach(function(bk){var d=DISCOUNTS[bk]||{};
-      Object.keys(d).forEach(function(y){(d[y]||[]).forEach(function(r){add(bk,r[0]);});});});
-  }catch(e){}
-  return PROMO_OWNERS;
-}
-var PROMO_FAMILY={SG:"IORA",MY:"IORA",TRTSG:"TRT",TRTMY:"TRT",SANSSG:"SANS",SANSMY:"SANS",MONOSG:"MONO",MONOMY:"MONO"};
-function promoCuratedOK(k,bkey){
-  if(bkey==="SG"||bkey==="MY")return true;                     // table's home brand
-  var o=promoOwners()[k];if(!o||!o[bkey])return false;
-  var fam=PROMO_FAMILY[bkey];
-  return Object.keys(o).every(function(b){return PROMO_FAMILY[b]===fam;});  // code confined to this label
-}
-var PROMO_STATS=null;
-function promoStats(){
-  if(PROMO_STATS)return PROMO_STATS;
-  PROMO_STATS={};
-  var add=function(bk,r){var k=String(r[0]||"").toUpperCase().trim();if(!k)return;
-    var m=PROMO_STATS[bk]=PROMO_STATS[bk]||{},o=m[k]=m[k]||{rev:0,ord:0,given:0};
-    o.rev+=r[1]||0;o.ord+=r[2]||0;o.given+=r[3]||0;};
-  try{if(typeof DISC_MONTHLY!=="undefined")Object.keys(DISC_MONTHLY).forEach(function(bk){var d=DISC_MONTHLY[bk]||{};
-    Object.keys(d).forEach(function(y){(d[y]||[]).forEach(function(rows){(rows||[]).forEach(function(r){add(bk,r);});});});});}catch(e){}
-  /* annual tables fill the gaps only where no monthly rows exist for that code */
-  try{if(typeof DISCOUNTS!=="undefined")Object.keys(DISCOUNTS).forEach(function(bk){var d=DISCOUNTS[bk]||{};
-    Object.keys(d).forEach(function(y){(d[y]||[]).forEach(function(r){
-      var k=String(r[0]||"").toUpperCase().trim();
-      if(!(PROMO_STATS[bk]&&PROMO_STATS[bk][k]))add(bk,r);});});});}catch(e){}
-  return PROMO_STATS;
-}
-var PROMO_MECH_CACHE={};
-function promoMechOf(name,type,bkey){
-  var k=String(name||"").toUpperCase().trim(),ck=bkey+"|"+k;
-  if(Object.prototype.hasOwnProperty.call(PROMO_MECH_CACHE,ck))return PROMO_MECH_CACHE[ck];
-  var st=(promoStats()[bkey]||{})[k]||null;
-  return (PROMO_MECH_CACHE[ck]=promoMech(name,type,bkey,st));
-}
-function promoCurSym(bkey){try{var b=(typeof BRANDS!=="undefined")&&BRANDS[bkey];return (b&&b.cur&&b.cur.sym)||"$";}catch(e){return "$";}}
-function promoFmtAmt(v,sym){return String(sym||"$").replace(/\s+$/,"")+((v%1===0)?String(v):String(Math.round(v*100)/100));}
-/* Is this per-order discount a clean configured amount (e.g. exactly $12, RM25)?
-   Real fixed-amount codes divide out exactly; percentage codes never do. */
-function promoExactAmount(v){
-  if(!(v>0)||!isFinite(v))return null;
-  var cands=[Math.round(v),Math.floor(v)+0.5];
-  for(var i=0;i<cands.length;i++){var c=cands[i];
-    if(c>0&&Math.abs(v-c)<=0.01)return c;}
-  return null;
-}
-/* Plain-English mechanic for any promotion, any brand.
-   Order: curated table -> name parse -> inferred from the promo's own actuals.
-   st = {rev, ord, given} for that promo in scope (optional but strongly preferred). */
-function promoMech(name,type,bkey,st){
-  var k=String(name||"").toUpperCase().trim(),sym=promoCurSym(bkey);
-  if(/PWP|GWP|TOTE BAG|SHOPPER BAG|ORIGAMI BAG|GIFT CARD|E-GIFT|FREE GIFT/.test(k))return "Purchase-with-purchase gift";
-  var clean=(st&&st.given>0&&st.ord>0)?promoExactAmount(st.given/st.ord):null;
-  var ovr=(typeof PROMO_MECH_BRAND!=="undefined"&&PROMO_MECH_BRAND[bkey])?PROMO_MECH_BRAND[bkey][k]:null;
-  if(ovr)return ovr;
-  var out=(typeof DISC_MECH!=="undefined"&&DISC_MECH[k]&&promoCuratedOK(k,bkey))?DISC_MECH[k]:"";
-  /* The curated table was written for iORA. The same code name means different
-     things at other brands (FIRST is $3 at iORA SG, $5 at TRT SG, $8 at SANS SG),
-     so drop a curated amount that the brand's own numbers contradict. */
-  if(out&&clean!=null){var mm=out.match(/(?:\$|RM)\s*(\d+(?:\.\d+)?)\s*OFF/i);
-    if(mm&&Math.abs(parseFloat(mm[1])-clean)>0.011)out="";}
-  if(!out)out=promoDeriveMech(name);
-  out=String(out||"").replace(/^\s*(automatic(\s+offer)?|discount\s+code)\s*[\u00b7:\-]\s*/i,"").trim();
-  if(out&&out.toUpperCase().replace(/[^A-Z0-9]/g,"")===k.replace(/[^A-Z0-9]/g,""))out="";
-  if(out&&!/^(automatic(\s+offer)?|discount\s+code)$/i.test(out))return out;
-  if(clean!=null)return promoFmtAmt(clean,sym)+" off per order";
-  if(st&&st.given>0&&st.rev>0){          // no clean amount -> read it as a % of order value
-    var pc=st.given/(st.rev+st.given)*100,L=[5,8,10,12,15,18,20,22,25,30,35,40,50];
-    for(var li=0;li<L.length;li++)if(Math.abs(pc-L[li])<=1)return "\u2248"+L[li]+"% off order value";
-  }
-  if(st&&st.given>0&&st.ord>0){var per=st.given/st.ord;
-    var disp=(Math.abs(per-Math.round(per))<=Math.max(0.02,per*0.01))?Math.round(per):Math.round(per*100)/100;
-    return "\u2248"+promoFmtAmt(disp,sym)+" off per order (avg)";}
-  var kind=promoDeriveKind(name);if(kind)return kind;
-  if(st&&st.given>0&&st.rev>0)return "\u2248"+(st.given/(st.rev+st.given)*100).toFixed(1)+"% off order value (avg)";
-  return "";
 }
 function promoTypeLabel(t){t=String(t||"").toLowerCase();
   if(t==="auto")return "Auto-applied";
@@ -2537,7 +2385,7 @@ function promoCalHTML(yy){
     html+='</div>';
   }
   html+='</div>';
-  var footHTML=(anyReal?'Promotions sourced from your discount-performance data \u00b7 mechanics come from the configured discount where we hold it, otherwise they are derived from that promotion\u2019s own actuals (marked \u2248)':'')+(anySynth?((anyReal?' \u00b7 ':'')+'<b style="color:var(--accent)">*</b> illustrative entries \u2014 connect your promotions Google Sheet to make the full calendar live'):'')+' \u00b7 dashed months are upcoming/planned.';
+  var footHTML=(anyReal?'Promotions and their figures come from Shopify\u2019s discount-performance data \u00b7 the terms shown are the discount as configured in Shopify; where Shopify holds no discount for a code, no terms are shown':'')+(anySynth?((anyReal?' \u00b7 ':'')+'<b style="color:var(--accent)">*</b> illustrative entries \u2014 connect your promotions Google Sheet to make the full calendar live'):'')+' \u00b7 dashed months are upcoming/planned.';
   return {html:html,foot:footHTML,years:years,year:yy};
 }
 function renderPromoCal(){
@@ -4003,12 +3851,49 @@ function loadWindow(brand, start, end) {
     });
   };
 
-  // Phase 2 (background, non-blocking): the Voucher metric has no ShopifyQL column,
+  // Phase 2a (background, non-blocking): the pick-up vs delivery split, on its own
+  // cheap request. It used to ride the full orders pull below — 45+ sequential pages
+  // of line-item payload it doesn't use — which made it the slowest panel on the page
+  // and the first to vanish when that pull hit the function ceiling. The endpoint now
+  // pages the four scalars the split actually needs.
+  //
+  // A pull that runs out of budget (or hits the page cap) returns NO section rather
+  // than a partial one: orders come back oldest-first, so a prefix of the window would
+  // give a biased pick-up percentage that looks perfectly plausible. Blank is honest.
+  var runFulfillment = function (attempt) {
+    fetchJSON("/api/dashboard?only=fulfillment&" + qs)
+      .then(function (payload) {
+        var f = payload && payload.sections && payload.sections.fulfillment;
+        if (f) {
+          PICKUP_DELIVERY[brand] = f;
+          LIVE_EXTRAS[brand] = Object.assign(LIVE_EXTRAS[brand] || {}, { fulfillment: f });
+        }
+        liveInfo(brand).fulfillmentDone = true;
+        if (brand === state.brand) {
+          reRender();
+          markComingSoonPanels(!!liveInfo(brand).ok);
+        }
+        // ONE delayed retry, and only for a genuinely transient failure. A page-cap
+        // truncation reports reason "truncated" and is deliberately excluded — a
+        // refetch reproduces it exactly.
+        var sm = payload && payload.meta && payload.meta.sections &&
+          payload.meta.sections.fulfillment;
+        if (!f && attempt < 1 && sm && (sm.reason === "throttle" || sm.reason === "timeout")) {
+          setTimeout(function () { runFulfillment(attempt + 1); }, 8000);
+        }
+      })
+      .catch(function () {
+        liveInfo(brand).fulfillmentDone = true;
+        if (brand === state.brand) reRender();
+      });
+  };
+  runFulfillment(0);
+
+  // Phase 2b (background, non-blocking): the Voucher metric has no ShopifyQL column,
   // so it needs the full Orders-API pull — and paging thousands of orders is the slow
   // part of a windowed load. We DON'T make anything wait on it; fire it off and
-  // merge `vou` into the Voucher metric whenever it lands. The same pull now also
-  // carries the order-derived sections (pickup/delivery split + price-based sale
-  // mix), folded below.
+  // merge `vou` into the Voucher metric whenever it lands. The same pull carries the
+  // price-based sale mix, folded below.
   var runPhase2 = function (attempt) {
   fetchJSON("/api/dashboard?" + qs)
     .then(function (payload) {
@@ -4022,33 +3907,20 @@ function loadWindow(brand, start, end) {
         });
         rebuildAggs();
       }
-      // Order-derived sections → the panels' front-end containers, and MERGED into
-      // LIVE_EXTRAS so markComingSoonPanels sees them as live — phase 2 and phase 3
-      // land in either order, so neither may replace the other's sections.
+      // Sale mix → the panel's front-end container, and MERGED into LIVE_EXTRAS so
+      // markComingSoonPanels sees it as live — phases 2a/2b/3 land in any order, so
+      // none may replace another's sections.
       var secs = payload && payload.sections;
-      if (secs && (secs.fulfillment || secs.saleMix)) {
-        var fold = {};
-        if (secs.fulfillment) {
-          PICKUP_DELIVERY[brand] = secs.fulfillment;
-          fold.fulfillment = secs.fulfillment;
-          fold.fulfillmentTruncated = !!(payload.meta && payload.meta.sections &&
-            payload.meta.sections.fulfillment && payload.meta.sections.fulfillment.truncated);
-        }
-        if (secs.saleMix) {
-          // renderSaleMix reads {sku:{...}, [year]:{revSale,...}} — the server's
-          // `years` map is spread to the top level of the container.
-          var sm = { sku: secs.saleMix.sku || null };
-          var smYears = Object.keys(secs.saleMix.years || {});
-          smYears.forEach(function (y) { sm[y] = secs.saleMix.years[y]; });
-          SALEMIX[brand] = sm;
-          if (smYears.length) saleState.year = +smYears[smYears.length - 1];
-          fold.saleMix = secs.saleMix;
-        }
-        LIVE_EXTRAS[brand] = Object.assign(LIVE_EXTRAS[brand] || {}, fold);
+      if (secs && secs.saleMix) {
+        // renderSaleMix reads {sku:{...}, [year]:{revSale,...}} — the server's
+        // `years` map is spread to the top level of the container.
+        var sm = { sku: secs.saleMix.sku || null };
+        var smYears = Object.keys(secs.saleMix.years || {});
+        smYears.forEach(function (y) { sm[y] = secs.saleMix.years[y]; });
+        SALEMIX[brand] = sm;
+        if (smYears.length) saleState.year = +smYears[smYears.length - 1];
+        LIVE_EXTRAS[brand] = Object.assign(LIVE_EXTRAS[brand] || {}, { saleMix: secs.saleMix });
       }
-      // Settle the fulfilment KPI's loading shimmer whether or not sections came
-      // back — resolved-with-nothing must read as pending, not spin forever.
-      liveInfo(brand).ordersExtrasDone = true;
       if (brand === state.brand) {
         reRender();
         markComingSoonPanels(!!liveInfo(brand).ok);
@@ -4060,45 +3932,56 @@ function loadWindow(brand, start, end) {
       }
     })
     .catch(function () {
-      liveInfo(brand).ordersExtrasDone = true;
       if (brand === state.brand) reRender();
     });
   };
   runPhase2(0);
 
-  // Phase 3 (background, non-blocking): the insight sections — best sellers,
-  // discount codes, category mix, traffic attribution, targets, funnel, monthly
-  // discounts/traffic, voucher report — from /api/insights, one round trip.
-  // Applied whenever it lands: the affected panels refresh in place.
-  var runPhase3 = function (attempt) {
-  fetchJSON("/api/insights?" + qs)
-    .then(function (payload) {
-      // Mark the pull as resolved either way, so loading shimmers (e.g. the Best
-      // Sellers KPI) settle into their real or pending state instead of spinning.
-      liveInfo(brand).extrasDone = true;
-      if (payload && payload.sections) {
-        applyExtras(brand, payload.sections, payload.meta && payload.meta.range);
-      }
-      if (brand === state.brand) {
-        reRender();
-        markComingSoonPanels(!!liveInfo(brand).ok);
-      }
-      // Sections lost to a ShopifyQL throttle get delayed refetches with widening
-      // spacing (the initial load fires ~17 analytics queries plus the orders pull,
-      // so the first attempt routinely loses tail sections; a later attempt on a
-      // quieter connection completes them). applyExtras merges, so already-loaded
-      // sections are kept and only the gaps fill in. The server never caches
-      // transient-failure payloads, so every refetch is a fresh attempt.
-      if (attempt < 3 && transientSections(payload)) {
-        setTimeout(function () { runPhase3(attempt + 1); }, 9000 * (attempt + 1));
-      }
-    })
-    .catch(function () {
-      liveInfo(brand).extrasDone = true;
-      if (brand === state.brand) reRender();
-    });
+  // Phase 3 (background, non-blocking): the insight sections — best sellers, discount
+  // codes, category mix, traffic attribution, targets, funnel, monthly discounts and
+  // traffic, voucher report — from /api/insights. Applied whenever they land: the
+  // affected panels refresh in place.
+  //
+  // Split into TWO parallel requests over a disjoint half of the ten ShopifyQL queries
+  // each. The Promotions tab reads only discountCodes + discountMonthly, and
+  // discountMonthly sat LAST in a width-2 pool — so the tab waited through all five
+  // rounds plus the best-seller image lookup for two queries that finish in the first.
+  // Partitioned, Promotions lands in about one round. The two sets MUST stay disjoint:
+  // an overlap would pay for the same analytics query twice and add throttle pressure.
+  var PROMO_QUERIES = "discountCodes,discountMonthly";
+
+  // `flag` is the liveInfo field whose loading shimmer this half settles.
+  var runInsights = function (qsExtra, flag, attempt) {
+    fetchJSON("/api/insights?" + qsExtra + "&" + qs)
+      .then(function (payload) {
+        // Mark this half resolved either way, so its loading shimmers settle into
+        // their real or pending state instead of spinning.
+        liveInfo(brand)[flag] = true;
+        if (payload && payload.sections) {
+          applyExtras(brand, payload.sections, payload.meta && payload.meta.range);
+        }
+        if (brand === state.brand) {
+          reRender();
+          markComingSoonPanels(!!liveInfo(brand).ok);
+        }
+        // Sections lost to a ShopifyQL throttle get delayed refetches with widening
+        // spacing (the initial load fires a lot of analytics queries alongside the
+        // orders pulls, so a first attempt can lose tail sections; a later attempt on
+        // a quieter connection completes them). applyExtras merges and never lets a
+        // null overwrite a loaded section, so only the gaps fill in. The server never
+        // caches transient-failure payloads, so every refetch is a fresh attempt.
+        if (attempt < 3 && transientSections(payload)) {
+          setTimeout(function () { runInsights(qsExtra, flag, attempt + 1); }, 9000 * (attempt + 1));
+        }
+      })
+      .catch(function () {
+        liveInfo(brand)[flag] = true;
+        if (brand === state.brand) reRender();
+      });
   };
-  runPhase3(0);
+  // 3a: Promotions (2 queries, ~1 round).  3b: everything else (8 queries + images).
+  runInsights("only=" + PROMO_QUERIES, "promoDone", 0);
+  runInsights("except=" + PROMO_QUERIES, "extrasDone", 0);
 
   }, 1500); // end deferred phases 2 + 3
 
@@ -4149,9 +4032,14 @@ function loadWindow(brand, start, end) {
 // badge logic; the other sections are translated into the panels' existing data
 // containers so their renderers work unchanged.
 function applyExtras(brand, sections, range) {
-  // MERGE, never replace: fulfillment/saleMix arrive separately via the phase-2
-  // orders pull, and the two payloads land in either order.
-  LIVE_EXTRAS[brand] = Object.assign(LIVE_EXTRAS[brand] || {}, sections || {});
+  // MERGE, never replace — and never let a null WIPE a section another payload already
+  // supplied. Sections arrive in several payloads that land in any order (phase 2a
+  // fulfillment, 2b sale mix, 3a promotions, 3b the rest), and each carries explicit
+  // nulls for the sections it did not ask for. Object.assign would clobber with those.
+  LIVE_EXTRAS[brand] = LIVE_EXTRAS[brand] || {};
+  Object.keys(sections || {}).forEach(function (k) {
+    if (sections[k] != null) LIVE_EXTRAS[brand][k] = sections[k];
+  });
   const yr = +((range && range.end && range.end.slice(0, 4)) || new Date().getFullYear());
   // Targets → BRANDS[brand].targets (renderTargets + the chaser read B().targets[year]).
   if (sections && sections.targets) {
@@ -4161,6 +4049,12 @@ function applyExtras(brand, sections, range) {
     });
     tgtState.year = yr;
   }
+  // Configured discount terms → LIVE_TERMS[brand][CODE]. Merged, not replaced: codes
+  // resolved for an earlier range keep their terms when the range changes.
+  const dt = sections && sections.discounts && sections.discounts.terms;
+  if (dt) {
+    LIVE_TERMS[brand] = Object.assign(LIVE_TERMS[brand] || {}, dt);
+  }
   // Discount codes → DISCOUNTS[brand][yr]: [code, revenue, orders, given, type].
   const dc = sections && sections.discounts && sections.discounts.codes;
   if (dc && dc.length) {
@@ -4169,7 +4063,6 @@ function applyExtras(brand, sections, range) {
       return [c.code, c.gross, c.orders, c.discount, "code"];
     });
     discState.year = yr;
-    delete DISC_PARTIAL[brand];
   }
   // Best sellers → PROD_<brand>[yr] {revenue, units}: [name, rev, units, orders, sku].
   const bs = sections && sections.bestSellers;
@@ -4179,8 +4072,10 @@ function applyExtras(brand, sections, range) {
     LIVE_IMG[brand] = Object.assign(LIVE_IMG[brand] || {}, bs.images);
   }
   if (bs && bs.byTitle && bs.byTitle.length && PROD_MAP[brand]) {
+    // [title, gross, units, orders, sku, product_type] — index 5 is Shopify's own
+    // category (null when the store hasn't set one), read by itemCat().
     const rows = bs.byTitle.map(function (p) {
-      return [p.title, p.gross, p.qty, p.orders || 0, "—"];
+      return [p.title, p.gross, p.qty, p.orders || 0, "—", p.type || null];
     });
     PROD_MAP[brand][yr] = {
       revenue: rows.slice().sort(function (a, b) { return b[1] - a[1]; }),
