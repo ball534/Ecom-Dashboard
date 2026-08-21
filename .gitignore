@@ -6,6 +6,9 @@
 # api/_token.js (the API now mints its own tokens), kept only for reference.
 oauth/
 
+# Meta access-tier warmup progress (scripts/meta-warmup.js)
+.meta-warmup-state.json
+
 # Vercel
 .vercel
 

@@ -25,18 +25,10 @@ import {
 import { settledPool, failInfo, deadline } from "../lib/http.js";
 import { normalizeBrand, currencyOf } from "../lib/env-keys.js";
 import { tokenStoreKind } from "../lib/token-store.js";
+import { todayInTZ } from "../lib/aggregate.js";
 
 const SHOP_TZ = "Asia/Singapore";
 const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
-
-function todayInTZ(tz) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
 
 const SOURCES = [
   { channel: "Shopee", fetch: fetchShopeeOrders },

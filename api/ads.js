@@ -26,18 +26,10 @@ import { fetchGoogleAds } from "../lib/ads-google.js";
 import { fetchTiktokAds, fetchTiktokCurrency } from "../lib/ads-tiktok.js";
 import { settledPool, failInfo, deadline } from "../lib/http.js";
 import { normalizeBrand, currencyOf } from "../lib/env-keys.js";
+import { todayInTZ } from "../lib/aggregate.js";
 
 const SHOP_TZ = "Asia/Singapore";
 const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
-
-function todayInTZ(tz) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
 
 // An UNSET or blank env var is not a target of zero: only a real number counts.
 function numEnv(v) {
@@ -63,9 +55,13 @@ export default async function handler(req, res) {
   if (start > end) [start, end] = [end, start];
   const range = resolveAdsYear(start, end);
 
-  // 45s of the function's 60s ceiling is handed to the platform pulls, so a slow
-  // provider fails its own section with reason:"timeout" instead of 504-ing the payload.
-  const budget = deadline(45000);
+  // 50s of the function's 60s ceiling (vercel.json) is handed to the platform pulls, so
+  // a slow provider fails its own section with reason:"timeout" instead of 504-ing the
+  // payload. Meta needs most of it: its insights work is an async job Meta computes
+  // server-side, measured 21 Aug 2026 at ~25s to compute a year of dailies plus ~5s per
+  // 1000-row results page — ~36s for iORA SG's 1,114 rows. The remaining 10s covers
+  // rolling the rows up and serialising the response.
+  const budget = deadline(50000);
 
   const results = await settledPool(
     AD_PLATFORMS.map(

@@ -35,8 +35,11 @@ import {
   buildSaleMixSection,
   monthsWithData,
   emptyYear,
+  todayInTZ,
   ORDER_METRICS,
 } from "../lib/aggregate.js";
+import { normalizeBrand } from "../lib/env-keys.js";
+import { settledPool } from "../lib/http.js";
 import {
   buildSalesQL,
   buildSessionsQL,
@@ -74,27 +77,6 @@ const failInfo = (e) => ({
   reason: e instanceof ShopifyError ? e.reason : "error",
   message: String(e?.message || e).slice(0, 400),
 });
-
-// Individual stores the dashboard can request live (one Shopify store each). The
-// front-end's roll-up brands (SGALL/MYALL/GROUP) are computed client-side from these,
-// so they never hit this endpoint directly. Unknown/absent brand -> SG.
-const LIVE_BRANDS = new Set([
-  "SG", "MY", "TRTSG", "TRTMY", "SANSSG", "SANSMY", "MONOSG", "MONOMY",
-]);
-function resolveBrand(q) {
-  const b = String(q.brand || "SG").toUpperCase();
-  return LIVE_BRANDS.has(b) ? b : "SG";
-}
-
-// "Today" as YYYY-MM-DD in the shop's timezone (en-CA formats as ISO date).
-function todayInTZ(tz) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
 
 // `only=fulfillment` — the pickup-vs-delivery split on its own, from the cheap
 // four-scalar orders pull. It exists because the split used to ride the FULL orders
@@ -156,7 +138,7 @@ async function fulfillmentOnly(res, cfg, brand, start, end) {
 export default async function handler(req, res) {
   const today = todayInTZ(SHOP_TZ);
   const q = req.query || {};
-  const brand = resolveBrand(q);
+  const brand = normalizeBrand(q.brand);
   // Resolves the store's domain + token, minting a short-lived token from its permanent
   // CLIENT_/SECRET_ pair when the store has no TOKEN_ of its own (api/_token.js).
   const cfg = await resolveConfig(process.env, brand);
@@ -228,18 +210,35 @@ export default async function handler(req, res) {
           ordf: Object.fromEntries(years.map((y) => [y, emptyYear()])),
         });
 
-    // Overlay the exact Analytics figures from ShopifyQL where available. These are
-    // independent best-effort calls: if either is unavailable (e.g. an Admin API
-    // version < 2025-10, or a token without reports access) we keep the Orders-based
-    // numbers and the front-end simply shows dashes for Sessions/Conversion.
+    // Overlay the exact Analytics figures from ShopifyQL where available. Independent
+    // best-effort calls: if one is unavailable (Admin API < 2025-10, or a token without
+    // reports access) we keep the Orders-based numbers and the front-end shows dashes.
+    //
+    // The three run through a width-2 pool rather than one after another — they share no
+    // data, so serialising them just added two round trips to every dashboard load. Width
+    // 2 (not 3) keeps this inside the same cost-throttle headroom api/insights.js uses,
+    // since the front-end fires both endpoints at once.
     let salesSource = "reconstructed";
     let sessionsLive = false;
     let shopifyqlError = null;
     let shopifyqlMessage = null;
 
-    try {
-      const { rows } = await shopifyQL(cfg, buildSalesQL(start, end));
-      const sales = bucketSales(rows, years);
+    const [salesRes, sessRes, fulfilRes] = await settledPool(
+      [
+        () => shopifyQL(cfg, buildSalesQL(start, end)),
+        () => shopifyQL(cfg, buildSessionsQL(start, end)),
+        () => shopifyQL(cfg, buildFulfillmentsQL(start, end)),
+      ],
+      2,
+    );
+    // Failures are folded in query order, so `shopifyqlError` still reports the sales
+    // dataset's reason in preference to the other two.
+    const noteFail = (e) => {
+      if (!shopifyqlError) shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
+    };
+
+    if (salesRes.status === "fulfilled") {
+      const sales = bucketSales(salesRes.value.rows, years);
       // Authoritative — replace the Orders-reconstructed metrics outright. These match the
       // admin Analytics page exactly (no cancelled-order or first-time/returning drift).
       for (const y of years) {
@@ -251,28 +250,26 @@ export default async function handler(req, res) {
         metrics.ret[y] = sales.ret[y];
       }
       salesSource = "shopifyql";
-    } catch (e) {
-      shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
-      shopifyqlMessage = String(e?.message || e).slice(0, 400);
+    } else {
+      noteFail(salesRes.reason);
+      shopifyqlMessage = String(salesRes.reason?.message || salesRes.reason).slice(0, 400);
     }
 
-    try {
-      const { rows } = await shopifyQL(cfg, buildSessionsQL(start, end));
-      const sess = bucketSessions(rows, years);
+    if (sessRes.status === "fulfilled") {
+      const sess = bucketSessions(sessRes.value.rows, years);
       metrics.ses = sess.ses;
       metrics.conversion = sess.conversion;
       sessionsLive = true;
-    } catch (e) {
-      if (!shopifyqlError) shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
+    } else {
+      noteFail(sessRes.reason);
     }
 
     // Orders FULFILLED (fulfillments dataset) — shown alongside orders placed. Best-effort:
     // if unavailable, `ordf` stays null and the front-end hides that card.
-    try {
-      const { rows } = await shopifyQL(cfg, buildFulfillmentsQL(start, end));
-      metrics.ordf = bucketFulfillments(rows, years).ordf;
-    } catch (e) {
-      if (!shopifyqlError) shopifyqlError = e instanceof ShopifyError ? e.reason : "error";
+    if (fulfilRes.status === "fulfilled") {
+      metrics.ordf = bucketFulfillments(fulfilRes.value.rows, years).ordf;
+    } else {
+      noteFail(fulfilRes.reason);
     }
 
     // Order-derived insight sections — FULL mode only (light mode never pages orders,

@@ -55,27 +55,14 @@ import {
   parseCategoryMix,
 } from "../lib/insights.js";
 import { TARGETS, getTargets } from "../lib/targets.js";
+import { todayInTZ } from "../lib/aggregate.js";
+import { normalizeBrand } from "../lib/env-keys.js";
+// Firing all ten insight queries at once trips Shopify's cost throttle — and takes down
+// /api/dashboard's sales query alongside it, which is what blanks Sales Revenue to dashes.
+import { settledPool } from "../lib/http.js";
 
 const SHOP_TZ = "Asia/Singapore";
 const isDate = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s);
-
-// Same live-store set + fallback as api/dashboard.js.
-const LIVE_BRANDS = new Set([
-  "SG", "MY", "TRTSG", "TRTMY", "SANSSG", "SANSMY", "MONOSG", "MONOMY",
-]);
-function resolveBrand(q) {
-  const b = String(q.brand || "SG").toUpperCase();
-  return LIVE_BRANDS.has(b) ? b : "SG";
-}
-
-function todayInTZ(tz) {
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: tz,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date());
-}
 
 const failInfo = (e) => ({
   ok: false,
@@ -83,31 +70,10 @@ const failInfo = (e) => ({
   message: String(e?.message || e).slice(0, 400),
 });
 
-// Run thunks with limited concurrency, returning Promise.allSettled-shaped results.
-// Firing all ten insight queries at once can trip Shopify's cost throttle — and take
-// down /api/dashboard's sales query (fetched by the front-end at the same moment),
-// which is what blanks Sales Revenue / Order Count to dashes.
-async function settledPool(thunks, width) {
-  const results = new Array(thunks.length);
-  let next = 0;
-  async function worker() {
-    while (next < thunks.length) {
-      const i = next++;
-      try {
-        results[i] = { status: "fulfilled", value: await thunks[i]() };
-      } catch (e) {
-        results[i] = { status: "rejected", reason: e };
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(width, thunks.length) }, worker));
-  return results;
-}
-
 export default async function handler(req, res) {
   const today = todayInTZ(SHOP_TZ);
   const q = req.query || {};
-  const brand = resolveBrand(q);
+  const brand = normalizeBrand(q.brand);
   // Mints this store's short-lived token when it has no permanent TOKEN_ (api/_token.js).
   const cfg = await resolveConfig(process.env, brand);
 

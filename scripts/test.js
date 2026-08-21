@@ -1073,6 +1073,41 @@ test("requestJSON: 401 fails fast, 429 retries then reports throttle, timeouts a
   }
 });
 
+test("requestJSON: a provider's own error body outranks the HTTP status", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    // Meta answers HTTP 400 for a dead token as well as for a throttle, so mapping on
+    // status alone would call both "http" and lose the diagnosis.
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ error: { code: 190, message: "Session expired" } }), { status: 400 });
+    await assert.rejects(
+      () =>
+        requestJSON("https://x.test/a", {
+          label: "T",
+          retries: 0,
+          accept: (j) => {
+            if (Number(j?.error?.code) === 190) throw new ApiError("auth", j.error.message);
+          },
+        }),
+      (e) => e.reason === "auth" && /Session expired/.test(e.message),
+    );
+
+    // An `accept` that recognises nothing must leave the status-based mapping alone.
+    let calls = 0;
+    globalThis.fetch = async () => {
+      calls++;
+      return new Response(JSON.stringify({ something: "else" }), { status: 503 });
+    };
+    await assert.rejects(
+      () => requestJSON("https://x.test/a", { label: "T", retries: 1, accept: () => {} }),
+      (e) => e.reason === "http" && e.status === 503,
+    );
+    assert.equal(calls, 2, "a 5xx is still transient and still retried");
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
 test("deadline throws a typed timeout so a paged pull fails instead of half-reporting", () => {
   const d = deadline(0);
   assert.throws(() => d.check("Shopee order list"), (e) => e.reason === "timeout");
@@ -1109,7 +1144,27 @@ test("Meta client maps a daily insights page into provider rows (stubbed HTTP)",
   try {
     const seen = [];
     globalThis.fetch = async (url, opts) => {
-      seen.push({ url: String(url), auth: opts?.headers?.Authorization });
+      const u = String(url);
+      seen.push({ url: u, method: opts?.method || "GET", auth: opts?.headers?.Authorization });
+      // Stage 1 — submit the async job (a POST to the account's /insights edge).
+      if (opts?.method === "POST") {
+        return new Response(JSON.stringify({ report_run_id: "777" }), { status: 200 });
+      }
+      // The account label read — name + the timezone Meta buckets this account's days in.
+      if (/timezone_name/.test(u)) {
+        return new Response(
+          JSON.stringify({ name: "iORA SG", timezone_name: "America/Los_Angeles", id: "act_111" }),
+          { status: 200 },
+        );
+      }
+      // Stage 2 — poll the run id until Meta has computed it.
+      if (/\/777\?|\/777$/.test(u)) {
+        return new Response(
+          JSON.stringify({ async_status: "Job Completed", async_percent_completion: 100, id: "777" }),
+          { status: 200 },
+        );
+      }
+      // Stage 3 — page the completed job's results.
       return new Response(
         JSON.stringify({
           data: [
@@ -1144,9 +1199,28 @@ test("Meta client maps a daily insights page into provider rows (stubbed HTTP)",
       // ONE purchase action is taken (omni first), never the sum of overlapping types.
       purchases: 7, revenue: 980.5,
     });
-    assert.ok(/act_111\/insights/.test(seen[0].url), "bare account id must be normalized to act_<id>");
-    assert.equal(seen[0].auth, "Bearer tok", "the token goes in the header, not the query string");
-    assert.ok(!/access_token/.test(seen[0].url));
+    // The pull must go through an async job: Meta's synchronous insights endpoint is cut
+    // off at ~30s server-side, so a year of dailies can only be fetched this way.
+    const submit = seen.find((s) => s.method === "POST");
+    assert.ok(submit, "the job is submitted, not fetched synchronously");
+    assert.ok(/act_111\/insights/.test(submit.url), "bare account id must be normalized to act_<id>");
+    assert.equal(submit.auth, "Bearer tok", "the token goes in the header, not the query string");
+    assert.ok(!seen.some((s) => /access_token/.test(s.url)));
+    assert.ok(seen.some((s) => /\/777/.test(s.url) && s.method === "GET"), "job status is polled");
+    assert.ok(
+      seen.some((s) => /\/777\/insights/.test(s.url)),
+      "results are read from the completed job, not the account edge",
+    );
+    // Caveats are served, never left for the reader to know: Meta's own attribution
+    // window, and an account that buckets its days somewhere other than the store does.
+    assert.ok(
+      out.notes.some((n) => /Meta-attributed/.test(n) && /not Shopify orders/.test(n)),
+      "purchases/revenue/ROAS are labelled as Meta-attributed",
+    );
+    assert.ok(
+      out.notes.some((n) => /America\/Los_Angeles/.test(n) && /Asia\/Singapore/.test(n)),
+      "an ad account on another timezone names it against the store's",
+    );
   } finally {
     globalThis.fetch = realFetch;
   }

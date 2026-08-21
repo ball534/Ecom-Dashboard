@@ -1,6 +1,6 @@
 # Live Data Integration Plan
 
-*Updated 7 August 2026.*
+*Updated 22 August 2026.*
 
 Goal: every figure on the dashboard comes from a **direct first-party API pull** — no aggregators, no AI in the data path. Only two files are hand-maintained, because no API exists for them (targets, commission).
 
@@ -27,7 +27,7 @@ All **8 Shopify Plus stores** (iORA / TRT / SANS & SANS / MONOLOQ × SG + MY) ar
 
 **Auth (done since the last revision):** iORA SG uses a permanent Admin token (`TOKEN_IORASG`); the other seven mint a fresh ~24h token per cold start via the OAuth `client_credentials` grant (`api/_token.js`, `CLIENT_<STORE>`/`SECRET_<STORE>`). The 24-hour re-token chore is gone.
 
-**Meta (live since 21 Aug 2026):** the app holds the **Marketing API Access Tier** (standard access) after App Review. Note the shape of the pull — Meta's *synchronous* insights endpoint is cut off at ~30s server-side, so a year of daily rows is only obtainable as an **async job** (`report_run_id`: submit → poll `async_status` → page the results). Do not “simplify” it back to a plain GET; it will work for a month and fail for a year. Full detail and measurements in ISSUES.md.
+**Meta (live since 21 Aug 2026):** the app holds the **Marketing API Access Tier** (standard access) after App Review. Note the shape of the pull — Meta's *synchronous* insights endpoint is cut off at ~30s server-side, so a year of daily rows is only obtainable as an **async job** (`report_run_id`: submit → poll `async_status` → page the results). Do not “simplify” it back to a plain GET; it will work for a month and fail for a year. The tab carries its own caveats (22 Aug 2026): purchases/revenue/ROAS are labelled Meta-attributed, and an ad account that buckets its days in another timezone — iORA SG is on America/Los_Angeles — says so, read live from the account rather than hardcoded. **Still unreconciled against Ads Manager, so do not quote figures yet.** Full detail and measurements in ISSUES.md.
 
 **Also since the last revision:** `/api/dashboard` has a *light* mode (KPIs without the orders paging) so brand switching stays fast; `scripts/probe-datasets.js` and `scripts/probe-columns.js` interrogate the live store for which ShopifyQL datasets/columns it will actually serve — that's what §4 is built from.
 
