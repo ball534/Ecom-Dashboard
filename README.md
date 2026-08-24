@@ -32,6 +32,17 @@ invalidates the old token on every refresh, and serverless environment variables
 at runtime, so the rotated pair is persisted to a Redis-compatible token store rather than
 lost on redeploy.
 
+Meta ad accounts are **discovered, but mapped by hand**. A Business-Manager system-user
+token sees nothing on `/me/adaccounts` — `me` is the system user, which owns no assets — so
+`npm run meta-accounts` reads the business's `owned_ad_accounts` and `client_ad_accounts`
+edges instead, follows paging, and dedupes. What it will not do is feed those ids into the
+live pull: which `act_` id belongs to which brand stays an explicit `META_AD_ACCOUNT_<STORE>`
+mapping, so that renaming an account in Ads Manager cannot re-attribute its spend and a
+newly created account cannot appear in a rollup nobody chose to put it in. The script exists
+to reconcile the two — it flags an active account mapped to no brand, an account wired to
+two, an env var pointing at an account the token cannot see, and a brand mixing SGD with
+MYR, and exits non-zero on anything that would misreport.
+
 The ad clients each normalise to one `{currency, supports, rows, notes}` shape, and where a
 platform has no unambiguous metric — TikTok purchase value, or Google "conversions" meaning
 every action the account counts — the panel says so in plain language instead of quietly

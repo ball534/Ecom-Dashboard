@@ -31,7 +31,6 @@
 import {
   resolveConfig,
   envNames,
-  envSuffix,
   shopifyQL,
   fetchProductImagesByTitle,
   fetchDiscountTerms,
@@ -74,7 +73,7 @@ export default async function handler(req, res) {
   const today = todayInTZ(SHOP_TZ);
   const q = req.query || {};
   const brand = normalizeBrand(q.brand);
-  // Mints this store's short-lived token when it has no permanent TOKEN_ (api/_token.js).
+  // Mints this store's short-lived access token from CLIENT_/SECRET_ (api/_token.js).
   const cfg = await resolveConfig(process.env, brand);
 
   let start = isDate(q.start) ? q.start : `${today.slice(0, 4)}-01-01`;
@@ -135,9 +134,9 @@ export default async function handler(req, res) {
         reason: cfg.tokenError ? cfg.tokenError.reason : "not-configured",
         message: cfg.tokenError
           ? String(cfg.tokenError.message).slice(0, 400)
-          : `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).domain} plus ` +
-            `either ${envNames(brand).token} or CLIENT_${envSuffix(brand)} + SECRET_${envSuffix(brand)} ` +
-            `in the Vercel project's Environment Variables.`,
+          : `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).domain}, ` +
+            `${envNames(brand).client} and ${envNames(brand).secret} in the Vercel project's ` +
+            `Environment Variables.`,
         sections: metaSections,
       },
     });

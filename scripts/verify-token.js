@@ -1,7 +1,8 @@
 // scripts/verify-token.js
-// Checks whether a store's Shopify credentials authenticate. For a store with no
-// permanent TOKEN_ (everything except iORA SG), this also proves that minting a
-// short-lived token from CLIENT_/SECRET_ works — the same path the deployed API uses.
+// Checks whether a store's Shopify credentials authenticate. Every store is on the
+// client_credentials path, so this also proves that minting a short-lived token from
+// CLIENT_/SECRET_ works — the same path the deployed API uses. A store carrying a
+// break-glass TOKEN_ override is checked with that token instead, and says so.
 //
 // Usage:  npm run verify-token            (iORA SG)
 //         node scripts/verify-token.js TRTSG
@@ -21,7 +22,15 @@ console.log("Shopify config:");
 console.log("  store  :", envSuffix(brand));
 console.log("  domain :", cfg.domain || "(not set)");
 console.log("  version:", cfg.version);
-console.log("  token  :", mask(cfg.token), cfg.minted ? "(minted just now via client_credentials)" : "");
+console.log(
+  "  token  :",
+  mask(cfg.token),
+  cfg.minted
+    ? "(minted just now via client_credentials)"
+    : cfg.token
+      ? `(pasted verbatim from the ${envNames(brand).token} override — not minted)`
+      : "",
+);
 console.log("");
 
 if (cfg.tokenError) {
@@ -50,7 +59,9 @@ try {
     console.error(`→ Set ${envNames(cfg.brand).domain} in .env to the store's <handle>.myshopify.com`);
     console.error("  Find it in Shopify admin: the admin URL admin.shopify.com/store/<handle>.");
   } else if (reason === "no-token") {
-    console.error(`→ Set ${envNames(cfg.brand).token} in .env.`);
+    console.error(`→ Set ${envNames(cfg.brand).client} + ${envNames(cfg.brand).secret} in .env.`);
+    console.error("  Shopify admin → Settings → Apps and sales channels → Develop apps →");
+    console.error("  (the app for this store) → API credentials → Client ID / Client secret.");
   } else if (reason === "auth") {
     if (cfg.token.startsWith("shpss_") || cfg.token.startsWith("shpca_")) {
       console.error("→ This is a 'shpss_' API SECRET KEY (shared secret), used only for");
@@ -64,10 +75,11 @@ try {
       console.error("→ The token was rejected and is not a standard Shopify Admin token.");
     }
     console.error("");
-    console.error("  To get the right token: iORA SG admin → Settings → Apps and sales");
-    console.error("  channels → Develop apps → (create/open the app) → API credentials →");
-    console.error("  Configure Admin API scopes (read_orders, read_products) → Install app →");
-    console.error(`  reveal the 'shpat_...' Admin API access token → put it in ${envNames(cfg.brand).token}.`);
+    console.error("  The standard fix is app credentials, not a pasted token: this store's");
+    console.error("  admin → Settings → Apps and sales channels → Develop apps → (the app) →");
+    console.error("  Configure Admin API scopes (read_orders, read_products, read_reports) →");
+    console.error("  Install app → API credentials → copy Client ID and Client secret into");
+    console.error(`  ${envNames(cfg.brand).client} / ${envNames(cfg.brand).secret}, and delete any ${envNames(cfg.brand).token} left over.`);
   } else if (reason === "scope") {
     console.error("→ Token works but lacks a required scope/approval. Add read_orders");
     console.error("  (and read_all_orders for >60-day history) to the custom app.");

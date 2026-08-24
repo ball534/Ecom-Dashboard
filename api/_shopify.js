@@ -16,22 +16,36 @@ const DEFAULT_API_VERSION = "2025-10";
 export { ShopifyError };
 
 // Multi-store: each brand button on the dashboard is backed by its own Shopify store, so
-// it needs its own Admin API token + permanent domain. Each store is one pair of env vars
-// (see .env.example):
-//   TOKEN_<STORE>   (e.g. TOKEN_IORASG, TOKEN_TRTMY)
+// it needs its own Admin API credentials + permanent domain. All eight stores are wired
+// up the SAME way — three permanent values each (see .env.example):
 //   DOMAIN_<STORE>  (e.g. DOMAIN_IORASG = iora-online.myshopify.com)
+//   CLIENT_<STORE>  the app's client id
+//   SECRET_<STORE>  the app's client secret (shpss_…)
+// The Admin API access token itself is minted from that pair at request time and expires
+// in ~24h (api/_token.js), so it is never stored anywhere.
+//
+// TOKEN_<STORE> is a BREAK-GLASS OVERRIDE: where one is set the store stops minting and
+// that value is used verbatim. No store should carry one in normal operation — iORA SG
+// was the last on a hand-pasted permanent token and now mints like the other seven.
+//
 // The store suffix differs from the dashboard's internal brand key for the two iORA
-// stores: brand SG -> TOKEN_IORASG, brand MY -> TOKEN_IORAMY. Everything else matches.
+// stores: brand SG -> IORASG, brand MY -> IORAMY. Everything else matches.
 const ENV_SUFFIX = { SG: "IORASG", MY: "IORAMY" };
 export const envSuffix = (brand) => {
   const B = String(brand || "SG").toUpperCase();
   return ENV_SUFFIX[B] || B;
 };
-// Names for this store's pair, used in "not configured" messages so they point at the
-// exact variable to set.
+// Names for this store's variables, used in "not configured" messages so they point at
+// the exact variables to set. `token` is the override, named only by messages that are
+// specifically about it — everything else should steer readers to client/secret.
 export const envNames = (brand) => {
   const s = envSuffix(brand);
-  return { token: `TOKEN_${s}`, domain: `DOMAIN_${s}` };
+  return {
+    domain: `DOMAIN_${s}`,
+    client: `CLIENT_${s}`,
+    secret: `SECRET_${s}`,
+    token: `TOKEN_${s}`,
+  };
 };
 
 // Shopify's two credentials have unmistakable, non-overlapping shapes: an Admin API
@@ -46,19 +60,21 @@ const looksLikeToken = (v) => /^shp[a-z]{2}_/i.test(v);
 const looksLikeDomain = (v) => /\.myshopify\.com$/i.test(v);
 // Warn at most once per store per process, so a per-request call site doesn't flood logs.
 const swapWarned = new Set();
+const overrideWarned = new Set();
 
 // Read + sanitize config from the environment, for a given brand/store.
 //
-// The TOKEN_/DOMAIN_ pair above is the canonical naming. The older SHOPIFY_-prefixed
-// names are still accepted as a fallback so an existing deployment (whose Vercel env
-// vars predate the rename) keeps working untouched. API version is shared by every
-// store via SHOPIFY_API_VERSION, unless one overrides it with SHOPIFY_API_VERSION_<KEY>.
+// DOMAIN_<STORE> is the canonical naming, and TOKEN_<STORE> the override. The older
+// SHOPIFY_-prefixed names are still accepted as a fallback so an existing deployment
+// (whose Vercel env vars predate the rename) keeps working untouched. API version is
+// shared by every store via SHOPIFY_API_VERSION, unless one overrides it with
+// SHOPIFY_API_VERSION_<KEY>.
 export function getConfig(env = process.env, brand = "SG") {
   const strip = (s) => (s || "").trim().replace(/^['"]|['"]$/g, "");
   const B = String(brand || "SG").toUpperCase();
   const S = envSuffix(B);
 
-  // Canonical: TOKEN_<STORE> / DOMAIN_<STORE>.
+  // DOMAIN_<STORE>, plus the TOKEN_<STORE> override where one has been set.
   let token = strip(env["TOKEN_" + S]);
   let domain = strip(env["DOMAIN_" + S]);
 
@@ -94,15 +110,29 @@ export function getConfig(env = process.env, brand = "SG") {
     }
   }
 
+  // Every store is meant to mint from CLIENT_/SECRET_. A TOKEN_ sitting next to a
+  // complete app-credentials pair is almost always a leftover from before that store was
+  // standardised — and because the override wins silently, the deployment would go on
+  // serving data through a hand-pasted token that nobody is rotating any more, right up
+  // until it is revoked. Say so, once per store per process.
+  if (token && hasAppCredentials(env, S) && !overrideWarned.has(S)) {
+    overrideWarned.add(S);
+    console.warn(
+      `[shopify] TOKEN_${S} is set alongside CLIENT_${S}/SECRET_${S}, so the override wins and ` +
+        `no token is being minted for ${S}. Unless this is a deliberate break-glass, delete ` +
+        `TOKEN_${S} to put the store back on the standard client_credentials path.`,
+    );
+  }
+
   const version =
     strip(env["SHOPIFY_API_VERSION_" + B]) || strip(env.SHOPIFY_API_VERSION) || DEFAULT_API_VERSION;
   return { token, domain, version, brand: B };
 }
 
-// getConfig + "if this store has no permanent token, mint a short-lived one now".
+// getConfig + "mint this store's short-lived access token now".
 //
-// This is what every request path should use. It is what removes the 24-hour chore: only
-// iORA SG needs a TOKEN_ variable, and every other store is authenticated from its
+// This is what every request path should use. It is what removes the 24-hour chore: no
+// store needs a TOKEN_ variable, because every one of them is authenticated from its
 // permanent CLIENT_/SECRET_ pair via the client_credentials grant (api/_token.js).
 //
 // It never throws. A minting failure comes back as `cfg.tokenError` with `cfg.token`
@@ -115,8 +145,8 @@ export async function resolveConfig(env = process.env, brand = "SG") {
   const cfg = getConfig(env, brand);
   const S = envSuffix(brand);
 
-  // A permanent token (iORA SG) always wins, and with no domain there is nothing to
-  // authenticate against — both fall through to the caller's "not configured" handling.
+  // A TOKEN_ override skips minting, and with no domain there is nothing to authenticate
+  // against — both fall through to the caller's "not configured" handling.
   if (cfg.token || !cfg.domain) return cfg;
   if (!hasAppCredentials(env, S)) return cfg;
 
@@ -146,7 +176,8 @@ export async function shopifyGraphQL(cfg, query, variables = {}, _attempt = 0) {
     throw new ShopifyError("no-domain", `${envNames(cfg.brand).domain} is not set`);
   }
   if (!cfg.token) {
-    throw new ShopifyError("no-token", `${envNames(cfg.brand).token} is not set`);
+    const n = envNames(cfg.brand);
+    throw new ShopifyError("no-token", `No access token for ${cfg.brand}: ${n.client} / ${n.secret} are not set`);
   }
 
   const url = `https://${cfg.domain}/admin/api/${cfg.version}/graphql.json`;

@@ -15,6 +15,7 @@
     "preview-insights": "node scripts/preview-insights.js",
     "preview-ads": "node scripts/preview-ads.js",
     "meta-warmup": "node scripts/meta-warmup.js",
+    "meta-accounts": "node scripts/meta-accounts.js",
     "preview-marketplace": "node scripts/preview-marketplace.js",
     "test": "node scripts/test.js",
     "probe-datasets": "node scripts/probe-datasets.js",

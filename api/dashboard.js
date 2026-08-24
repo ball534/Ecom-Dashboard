@@ -22,7 +22,6 @@
 import {
   resolveConfig,
   envNames,
-  envSuffix,
   fetchOrders,
   fetchFulfillmentOrders,
   fetchVariantCompareAt,
@@ -139,8 +138,8 @@ export default async function handler(req, res) {
   const today = todayInTZ(SHOP_TZ);
   const q = req.query || {};
   const brand = normalizeBrand(q.brand);
-  // Resolves the store's domain + token, minting a short-lived token from its permanent
-  // CLIENT_/SECRET_ pair when the store has no TOKEN_ of its own (api/_token.js).
+  // Resolves the store's domain and mints a short-lived access token from its permanent
+  // CLIENT_/SECRET_ pair (api/_token.js).
   const cfg = await resolveConfig(process.env, brand);
 
   // A brand with no token/domain configured isn't an error — it just isn't wired up yet.
@@ -158,9 +157,9 @@ export default async function handler(req, res) {
         reason: cfg.tokenError ? cfg.tokenError.reason : "not-configured",
         message: cfg.tokenError
           ? String(cfg.tokenError.message).slice(0, 400)
-          : `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).domain} plus ` +
-            `either ${envNames(brand).token} or CLIENT_${envSuffix(brand)} + SECRET_${envSuffix(brand)} ` +
-            `in the Vercel project's Environment Variables.`,
+          : `No Shopify credentials configured for brand "${brand}". Set ${envNames(brand).domain}, ` +
+            `${envNames(brand).client} and ${envNames(brand).secret} in the Vercel project's ` +
+            `Environment Variables.`,
       },
     });
   }
@@ -327,8 +326,8 @@ export default async function handler(req, res) {
           message:
             shopifyqlMessage ||
             "The API responded but returned no live figures. On Vercel this usually means " +
-              `${envNames(brand).token} / ${envNames(brand).domain} are not set in the ` +
-              "project's Environment Variables.",
+              `${envNames(brand).domain} / ${envNames(brand).client} / ${envNames(brand).secret} ` +
+              "are not set in the project's Environment Variables.",
           apiVersion: cfg.version,
           salesSource,
           sessionsLive,

@@ -53,7 +53,7 @@ import {
   buildCampaignRows,
   resolveAdsYear,
 } from "../lib/ads.js";
-import { fetchMetaAds } from "../lib/ads-meta.js";
+import { discoverAdAccounts, fetchMetaAds, metaAccountMap } from "../lib/ads-meta.js";
 import { fetchGoogleAds } from "../lib/ads-google.js";
 import { fetchTiktokAds } from "../lib/ads-tiktok.js";
 import {
@@ -654,9 +654,15 @@ test("getConfig reads TOKEN_/DOMAIN_ per store, maps SG/MY to the iORA suffixes"
     TOKEN_MONOMY: "shpat_" + "b".repeat(32),
     DOMAIN_MONOMY: "https://monoloq-my.myshopify.com/admin",
   };
-  assert.deepEqual(envNames("SG"), { token: "TOKEN_IORASG", domain: "DOMAIN_IORASG" });
-  assert.deepEqual(envNames("MY"), { token: "TOKEN_IORAMY", domain: "DOMAIN_IORAMY" });
-  assert.deepEqual(envNames("TRTSG"), { token: "TOKEN_TRTSG", domain: "DOMAIN_TRTSG" });
+  const names = (s) => ({
+    domain: `DOMAIN_${s}`,
+    client: `CLIENT_${s}`,
+    secret: `SECRET_${s}`,
+    token: `TOKEN_${s}`,
+  });
+  assert.deepEqual(envNames("SG"), names("IORASG"));
+  assert.deepEqual(envNames("MY"), names("IORAMY"));
+  assert.deepEqual(envNames("TRTSG"), names("TRTSG"));
 
   const sg = getConfig(env, "SG");
   assert.equal(sg.token, env.TOKEN_IORASG);
@@ -758,9 +764,42 @@ test("resolveConfig mints a token from CLIENT_/SECRET_ and caches it across call
   }
 });
 
-test("resolveConfig keeps a permanent TOKEN_ and never calls the token endpoint", async () => {
+// iORA SG was the last store on a hand-pasted permanent token. It is now wired up exactly
+// like the other seven, so the standard path has to hold for it too — including the two
+// iORA brand keys mapping onto the IORASG/IORAMY suffixes.
+test("iORA SG mints from CLIENT_IORASG/SECRET_IORASG like every other store", async () => {
   clearTokenCache();
   const stub = stubTokenEndpoint();
+  try {
+    const cfg = await resolveConfig(
+      {
+        DOMAIN_IORASG: "iora-online.myshopify.com",
+        CLIENT_IORASG: "client-id",
+        SECRET_IORASG: "shpss_secret",
+      },
+      "SG",
+    );
+    assert.equal(cfg.token, "shpat_minted_1");
+    assert.equal(cfg.minted, true);
+    assert.ok(!cfg.tokenError);
+    assert.equal(stub.calls.length, 1);
+    assert.equal(stub.calls[0].url, "https://iora-online.myshopify.com/admin/oauth/access_token");
+    assert.match(stub.calls[0].body, /grant_type=client_credentials/);
+  } finally {
+    stub.restore();
+    clearTokenCache();
+  }
+});
+
+// TOKEN_ survives as a break-glass override: it wins, skips minting entirely, and — because
+// winning silently would let a forgotten leftover keep a store on an unrotated token — says
+// so in the log when it is sitting next to a usable CLIENT_/SECRET_ pair.
+test("a TOKEN_ override wins over app credentials, warns, and never calls the token endpoint", async () => {
+  clearTokenCache();
+  const stub = stubTokenEndpoint();
+  const warn = console.warn;
+  const warnings = [];
+  console.warn = (...a) => warnings.push(a.join(" "));
   try {
     const cfg = await resolveConfig(
       {
@@ -774,9 +813,30 @@ test("resolveConfig keeps a permanent TOKEN_ and never calls the token endpoint"
     assert.equal(cfg.token, "shpat_" + "d".repeat(32));
     assert.ok(!cfg.minted);
     assert.equal(stub.calls.length, 0);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /TOKEN_IORASG is set alongside CLIENT_IORASG\/SECRET_IORASG/);
   } finally {
+    console.warn = warn;
     stub.restore();
     clearTokenCache();
+  }
+});
+
+// No app credentials to contradict, so no warning — a store deliberately run on a pasted
+// token stays quiet.
+test("a TOKEN_ with no CLIENT_/SECRET_ beside it is used without warning", () => {
+  const warn = console.warn;
+  const warnings = [];
+  console.warn = (...a) => warnings.push(a.join(" "));
+  try {
+    const cfg = getConfig(
+      { DOMAIN_SANSSG: "sansandsans-sg.myshopify.com", TOKEN_SANSSG: "shpat_" + "e".repeat(32) },
+      "SANSSG",
+    );
+    assert.equal(cfg.token, "shpat_" + "e".repeat(32));
+    assert.equal(warnings.length, 0);
+  } finally {
+    console.warn = warn;
   }
 });
 
@@ -1311,6 +1371,132 @@ test("Lazada client maps /orders/get, excludes cancelled, keeps voucher codes", 
   } finally {
     globalThis.fetch = realFetch;
   }
+});
+
+
+// A system-user token sees nothing on /me/adaccounts, so discovery reads the business's
+// two account edges instead. Both of them: an account the business owns outright appears
+// only on owned_ad_accounts, one shared in by another business only on client_ad_accounts.
+const DISCOVERY_ENV = { META_ACCESS_TOKEN: "tok", META_BUSINESS_ID: "999" };
+
+function stubDiscovery(pages) {
+  const seen = [];
+  globalThis.fetch = async (url, opts) => {
+    const u = String(url);
+    seen.push({ url: u, auth: opts?.headers?.Authorization });
+    for (const [match, body] of pages) {
+      if (u.includes(match)) return new Response(JSON.stringify(body), { status: 200 });
+    }
+    return new Response(JSON.stringify({ error: { code: 100, message: `unstubbed ${u}` } }), {
+      status: 400,
+    });
+  };
+  return seen;
+}
+
+test("Meta discovery reads BOTH business edges, follows paging and dedupes by id", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    const seen = stubDiscovery([
+      [
+        "999/owned_ad_accounts",
+        {
+          data: [
+            { id: "act_317407367", name: "iORA SG", account_status: 1, currency: "SGD",
+              timezone_name: "America/Los_Angeles", amount_spent: "128455032" },
+            { id: "act_2311636498906929", name: "Hao Ping Ng", account_status: 1,
+              currency: "SGD", timezone_name: "Asia/Singapore", amount_spent: "4210" },
+          ],
+        },
+      ],
+      // Page 2 of the client edge is matched first — the stub is order-sensitive.
+      ["client_ad_accounts?after=CURSOR", {
+        data: [{ id: "act_444", name: "SANS MY 2021 Ads", account_status: 2, currency: "MYR",
+                 timezone_name: "Asia/Kuala_Lumpur", amount_spent: "45000" }],
+      }],
+      ["999/client_ad_accounts", {
+        data: [
+          { id: "act_333", name: "Monoloq MY", account_status: 1, currency: "MYR",
+            timezone_name: "Asia/Kuala_Lumpur", amount_spent: "980000" },
+          // Same account as the owned edge — one row out, not two.
+          { id: "act_317407367", name: "iORA SG", account_status: 1, currency: "SGD",
+            timezone_name: "America/Los_Angeles", amount_spent: "128455032" },
+        ],
+        paging: { next: "https://graph.facebook.com/v23.0/999/client_ad_accounts?after=CURSOR" },
+      }],
+    ]);
+
+    const out = await discoverAdAccounts(DISCOVERY_ENV);
+    assert.equal(out.businessId, "999");
+    assert.ok(seen.some((s) => /owned_ad_accounts/.test(s.url)), "owned edge is read");
+    assert.ok(seen.some((s) => /client_ad_accounts/.test(s.url)), "client edge is read");
+    assert.ok(seen.every((s) => s.auth === "Bearer tok"), "token goes in the header");
+    assert.ok(seen.every((s) => !/access_token=/.test(s.url)));
+    assert.ok(
+      seen.some((s) => /after=CURSOR/.test(s.url)),
+      "paging.next is followed — a second page must not be silently truncated",
+    );
+
+    const byId = Object.fromEntries(out.accounts.map((a) => [a.id, a]));
+    assert.equal(out.accounts.length, 4, "the account on both edges is returned once");
+    assert.deepEqual(byId.act_317407367.edges, ["owned_ad_accounts", "client_ad_accounts"]);
+    // amount_spent arrives in cents.
+    assert.equal(byId.act_317407367.amountSpent, 1284550.32);
+    assert.equal(byId.act_317407367.timezone, "America/Los_Angeles");
+    // Nothing is filtered out — a disabled or excluded account is reported AS SUCH, so it
+    // can be acted on rather than quietly vanishing from the report.
+    assert.equal(byId.act_444.active, false);
+    assert.equal(byId.act_444.statusLabel, "DISABLED");
+    assert.equal(byId.act_2311636498906929.excluded, true, "the personal account is excluded");
+    assert.equal(byId.act_333.excluded, false);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("Meta discovery keeps ONE edge's data when the other fails, and reports why", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    stubDiscovery([
+      ["999/owned_ad_accounts", { data: [{ id: "act_1", name: "iORA SG", account_status: 1 }] }],
+      ["999/client_ad_accounts", { error: { code: 200, message: "no permission" } }],
+    ]);
+    const out = await discoverAdAccounts(DISCOVERY_ENV);
+    assert.equal(out.accounts.length, 1);
+    assert.ok(/client_ad_accounts could not be read/.test(out.notes.join(" ")));
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("Meta discovery with both edges down keeps the token's own reason (auth, not api)", async () => {
+  const realFetch = globalThis.fetch;
+  try {
+    // Code 190 is a dead token. A caller told reason:"api" cannot act; "auth" says
+    // regenerate the system-user token.
+    stubDiscovery([["_ad_accounts", { error: { code: 190, message: "session invalidated" } }]]);
+    await assert.rejects(
+      () => discoverAdAccounts(DISCOVERY_ENV),
+      (e) => e.reason === "auth" && /session invalidated/.test(e.message),
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+test("metaAccountMap reads act_id -> brand out of the env, catching a double-wired account", () => {
+  const { map, brands } = metaAccountMap({
+    META_AD_ACCOUNT_SG: "317407367",
+    META_AD_ACCOUNT_MONOSG: "act_333,act_317407367",
+  });
+  // The bare id is normalized, so the same account under two spellings is ONE key.
+  assert.deepEqual(
+    map.get("act_317407367").map((w) => w.brand),
+    ["SG", "MONOSG"],
+    "an account wired to two brands is reported as both, never silently resolved to one",
+  );
+  assert.deepEqual(map.get("act_333").map((w) => w.market), ["SG"]);
+  assert.deepEqual(brands.SANSMY, { ids: [], envName: "META_AD_ACCOUNT_SANSMY" });
 });
 
 

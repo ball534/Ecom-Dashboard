@@ -2,18 +2,21 @@
 // Mints Shopify Admin API access tokens on demand, so the deployment never has to be
 // re-fed hand-generated tokens.
 //
-// Seven of the eight stores are served by Shopify apps whose access tokens expire after
-// ~24 hours (only iORA SG has a permanent `shpat_` token). Those short-lived tokens are
-// obtained with the OAuth **client_credentials** grant — the same two calls the standalone
-// oauth/main.py script made, except here they happen inside the serverless function at
+// All eight stores are served by Shopify apps whose access tokens expire after ~24 hours.
+// Those short-lived tokens are obtained with the OAuth **client_credentials** grant —
+// the same two calls the standalone oauth/main.py script made, except here they happen inside the serverless function at
 // request time. The credentials that DO live in Vercel's environment are then permanent:
 //
 //   DOMAIN_<STORE>   e.g. DOMAIN_TRTSG = trt-sg.myshopify.com   (never changes)
 //   CLIENT_<STORE>   the app's client id / API key              (never changes)
 //   SECRET_<STORE>   the app's client secret (shpss_…)          (never changes)
 //
-// A store that has TOKEN_<STORE> set keeps using it verbatim (iORA SG), so nothing about
-// the permanent-token path changes.
+// A store that has TOKEN_<STORE> set keeps using it verbatim. That is a BREAK-GLASS
+// OVERRIDE, not a second supported setup: every store, iORA SG included, is expected to
+// mint. iORA SG was the last store on a hand-pasted permanent `shpat_` token and has been
+// moved onto this path, so there is now one way in rather than two. A stale TOKEN_ left
+// behind silently disables minting for that store, so getConfig warns when it finds one
+// sitting next to a CLIENT_/SECRET_ pair (api/_shopify.js).
 //
 // Caching: a minted token is held in module scope, which on Vercel survives for the life
 // of the warm lambda instance — so a burst of dashboard requests mints once, not once per
@@ -119,7 +122,7 @@ export async function getAccessToken(env, suffix, domain, { force = false, stale
   if (!clientId || !clientSecret) {
     throw new ShopifyError(
       "no-token",
-      `No token and no app credentials for ${S}: set TOKEN_${S}, or CLIENT_${S} + SECRET_${S}`,
+      `No app credentials for ${S}: set CLIENT_${S} + SECRET_${S} (or, to override minting entirely, TOKEN_${S})`,
     );
   }
   if (!domain) {
