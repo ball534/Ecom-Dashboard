@@ -2505,7 +2505,12 @@ function setBrand(b){applyBrandTheme(b);state.brand=b;CUR=BRANDS[b].cur;
    CAMPAIGNS[platform][brand] its campaign rows — both exactly as the API served
    them. Nothing here is seeded: a platform without credentials stays absent and
    its card reads "No data", never a number.                                     */
-const DOTD={}; // Dotdigital — no live source yet (phase 4)
+// Email, live from /api/email — Dotdigital for iORA/SANS/TRT, Klaviyo for MONOLOQ.
+// DOTD[brand] = { campaigns:[{s,n,dl,op,cl,rv,or}], year, currency, provider }.
+// Nothing here is seeded: a store without credentials stays absent and its card reads
+// "No email sends", never a number. rv/or are null — not 0 — where the sending account
+// attributes no revenue; see _addN above for why that distinction survives the sums.
+const DOTD={};
 const ADS={fb:{},google:{},tiktok:{}};
 const CAMPAIGNS={fb:{},google:{},tiktok:{}};
 const FB_CAMPAIGNS=CAMPAIGNS.fb;
@@ -2551,6 +2556,12 @@ function _roas(v){return v==null?"\u2013":v.toFixed(2)+"\u00d7";}
 function _m0(v){return v==null?"\u2013":money(v);}
 function _m2(v){return v==null?"\u2013":moneyP(v);}
 function _i0(v){return v==null?"\u2013":int(v);}
+// Null-preserving addition, for metrics a source may not report at all. Plain `a+=b`
+// turns a column of nulls into 0, which would render an untracked figure as a
+// confident zero; starting an accumulator at null and folding with this keeps it null
+// until a real number arrives. Used by the email panel, where revenue and orders are
+// null for the whole window when the sending account attributes neither.
+function _addN(a,b){return b==null?a:(a==null?b:a+b);}
 var MONTHS_FULL=["January","February","March","April","May","June","July","August","September","October","November","December"];
 var _MSHORT={Jan:0,Feb:1,Mar:2,Apr:3,May:4,Jun:5,Jul:6,Aug:7,Sep:8,Oct:9,Nov:10,Dec:11};
 function monthFull(x){
@@ -2712,38 +2723,41 @@ function adsSummary(pf,gran){
 function dotdSummary(region,useFilter){
   var D=DOTD[region];
   if(!D)return {n:0};
-  var t={dl:0,op:0,cl:0,rv:0,or:0,n:(D.months||[]).length};
+  var t={dl:0,op:0,cl:0,rv:null,or:null,n:(D.months||[]).length};
   if(useFilter){
     var cs=dotdCampaigns(region);
     var mset={};
-    cs.forEach(function(c){t.dl+=c.dl;t.op+=c.op;t.cl+=c.cl;t.rv+=c.rv;t.or+=c["or"];mset[c.s.slice(0,7)]=1;});
+    cs.forEach(function(c){t.dl+=c.dl;t.op+=c.op;t.cl+=c.cl;t.rv=_addN(t.rv,c.rv);t.or=_addN(t.or,c["or"]);mset[c.s.slice(0,7)]=1;});
     t.n=Object.keys(mset).length;
   }else{
   (D.delivered||[]).forEach(function(v){t.dl+=v||0;});
   (D.opened||[]).forEach(function(v){t.op+=v||0;});
   (D.clicks||[]).forEach(function(v){t.cl+=v||0;});
-  (D.rev||[]).forEach(function(v){t.rv+=v||0;});
-  (D.orders||[]).forEach(function(v){t.or+=v||0;});
+  (D.rev||[]).forEach(function(v){t.rv=_addN(t.rv,v);});
+  (D.orders||[]).forEach(function(v){t.or=_addN(t.or,v);});
   }
   t.openRate=t.dl?t.op/t.dl:null;
   t.clickRate=t.dl?t.cl/t.dl:null;
   t.ctor=t.op?t.cl/t.op:null;
   t.aov=t.or?t.rv/t.or:null;
-  t.convRate=t.cl?t.or/t.cl:null;
-  t.rpm=t.dl?t.rv/(t.dl/1000):null;
+  t.convRate=(t.cl&&t.or!=null)?t.or/t.cl:null;
+  t.rpm=(t.dl&&t.rv!=null)?t.rv/(t.dl/1000):null;
   return t;
 }
 function dotdOverviewSummary(region){
   var D=DOTD[region];
-  var yr=adsState.ovYear||2026, mo=adsState.ovMonth||"all";
-  var t={dl:0,op:0,cl:0,rv:0,or:0,n:0};
-  if(!D||yr!==2026)return t;
+  var yr=adsState.ovYear||ADS_THIS_YEAR, mo=adsState.ovMonth||"all";
+  var t={dl:0,op:0,cl:0,rv:null,or:null,n:0};
+  // The panel shows one calendar year at a time and /api/email serves exactly the year
+  // it was asked for, so a region holding a different year has nothing to say about
+  // this one — it is being re-fetched.
+  if(!D||(D.year!=null&&yr!==D.year))return t;
   var SH=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
   var mset={};
   (D.campaigns||[]).forEach(function(c){
     var mi=+c.s.slice(5,7)-1;
     if(mo!=="all"&&SH[mi]!==mo)return;
-    t.dl+=c.dl;t.op+=c.op;t.cl+=c.cl;t.rv+=c.rv;t.or+=c["or"];mset[c.s.slice(0,7)]=1;
+    t.dl+=c.dl;t.op+=c.op;t.cl+=c.cl;t.rv=_addN(t.rv,c.rv);t.or=_addN(t.or,c["or"]);mset[c.s.slice(0,7)]=1;
   });
   t.n=Object.keys(mset).length;
   t.openRate=t.dl?t.op/t.dl:null;
@@ -2765,8 +2779,8 @@ function dotdTable(region){
   var keys=[],B={};
   cs.forEach(function(c){
     var k=c.s.slice(0,7);
-    if(!B[k]){B[k]={dl:0,op:0,cl:0,rv:0,or:0};keys.push(k);}
-    B[k].dl+=c.dl;B[k].op+=c.op;B[k].cl+=c.cl;B[k].rv+=c.rv;B[k].or+=c["or"];
+    if(!B[k]){B[k]={dl:0,op:0,cl:0,rv:null,or:null};keys.push(k);}
+    B[k].dl+=c.dl;B[k].op+=c.op;B[k].cl+=c.cl;B[k].rv=_addN(B[k].rv,c.rv);B[k].or=_addN(B[k].or,c["or"]);
   });
   keys.sort();
   var M=keys.map(function(k){return MONTHS_FULL[+k.slice(5,7)-1]+' '+k.slice(0,4);});
@@ -2787,7 +2801,10 @@ function dotdTable(region){
   var body=rows.map(function(r){
     var vals,tot,avg;
     if(r.agg==='sum'){
-      vals=r.v.slice(); tot=vals.reduce(function(a,b){return a+(b||0);},0); avg=n?tot/n:null;
+      vals=r.v.slice();
+      // An all-null row is a metric this account does not report, not a zero total.
+      tot=vals.every(function(v){return v==null;})?null:vals.reduce(function(a,b){return a+(b||0);},0);
+      avg=(tot!=null&&n)?tot/n:null;
     }else{
       vals=keys.map(function(_,i){return (r.de[i]?r.nu[i]/r.de[i]:null);});
       var sn=r.nu.reduce(function(a,b){return a+(b||0);},0),sd=r.de.reduce(function(a,b){return a+(b||0);},0);
@@ -3221,8 +3238,8 @@ function renderAds(){
   if(!region){
     var _ai=(LIVE[state.brand]||{}),_am=(ADS_META[state.brand]||{});
     var _why='';
-    if(_ai.adsLoading){
-      _why='<div>Loading Facebook, Google and TikTok…</div>';
+    if(_ai.adsLoading||_ai.emailLoading){
+      _why='<div>Loading Facebook, Google, TikTok and email…</div>';
     }else{
       // Say exactly which platform reported what, so "nothing here" is diagnosable
       // rather than mysterious.
@@ -3232,11 +3249,18 @@ function renderAds(){
         if(s.ok)return p[1]+': connected, no spend in this window';
         return p[1]+': '+(s.reason==="not-configured"?"no credentials set":s.reason);
       }).filter(Boolean);
+      var _em=((LIVE_EMAIL[state.brand]||{}).meta)||null;
+      if(_em){
+        var _eL=(_em.provider==="klaviyo"?"Klaviyo":"Dotdigital");
+        _lines.push(_em.ok
+          ? _eL+': connected, no sends in this window'
+          : _eL+': '+(_em.reason==="not-configured"?"no credentials set":_em.reason));
+      }
       _why=_lines.length
         ? '<div style="margin-top:10px;font-size:12.5px">'+_lines.join('<br>')+'</div>'
         : '';
     }
-    host.innerHTML='<section class="panel"><div class="empty" style="padding:48px 24px;line-height:1.7"><div style="font-family:Fraunces,serif;font-size:21px;color:var(--ink);margin-bottom:10px">No advertising data for '+B().name+'</div><div>Facebook, Google and TikTok figures come straight from each platform’s API — nothing is shown until one of them answers, because this dashboard never displays numbers it can’t back with data.</div>'+_why+'</div></section>';
+    host.innerHTML='<section class="panel"><div class="empty" style="padding:48px 24px;line-height:1.7"><div style="font-family:Fraunces,serif;font-size:21px;color:var(--ink);margin-bottom:10px">No advertising or email data for '+B().name+'</div><div>Facebook, Google, TikTok and email figures come straight from each platform’s API — nothing is shown until one of them answers, because this dashboard never displays numbers it can’t back with data.</div>'+_why+'</div></section>';
     return;
   }
   var gran=adsState.gran;
@@ -4232,6 +4256,15 @@ function mergeAdsCampaigns(parts) {
 }
 
 // Rebuild the roll-up brands' ads series from whichever members have loaded.
+// The Ads tab renders for a brand when EITHER an ad platform or the email panel has
+// data for it. Keeping this in one place is what lets Dotdigital light up a store that
+// runs no paid media — and stops an ads payload landing second from deleting the claim
+// an email payload already made.
+function _claimAdsTab(brand) {
+  var hasAds = ["fb", "google", "tiktok"].some(function (p) { return !!ADS[p][brand]; });
+  if (hasAds || DOTD[brand]) _AR[brand] = brand; else delete _AR[brand];
+}
+
 function rebuildAdsAggs() {
   Object.keys(AGG_MEMBERS).forEach(function (agg) {
     var isGroup = agg === "GROUP";
@@ -4253,8 +4286,7 @@ function rebuildAdsAggs() {
         delete CAMPAIGNS[plat][agg];
       }
     });
-    var any = ["fb", "google", "tiktok"].some(function (p) { return !!ADS[p][agg]; });
-    if (any) _AR[agg] = agg; else delete _AR[agg];
+    _claimAdsTab(agg);
     // A roll-up's currency note is whatever its members reported.
     ADS_META[agg] = { _storeCurrency: (BRANDS[agg] && BRANDS[agg].cur && BRANDS[agg].cur.code) || null };
     AGG_MEMBERS[agg].forEach(function (k) {
@@ -4278,8 +4310,7 @@ function applyAdsPayload(brand, payload) {
     if (plats[p]) { ADS[p][brand] = plats[p]; any = true; } else { delete ADS[p][brand]; }
     if (camps[p]) CAMPAIGNS[p][brand] = camps[p]; else delete CAMPAIGNS[p][brand];
   });
-  // Only claim the tab for this brand when a platform actually returned a series.
-  if (any) _AR[brand] = brand; else delete _AR[brand];
+  _claimAdsTab(brand);
   // Optional, hand-configured performance targets (server-side env) — absent by default.
   if (meta.targets) {
     if (meta.targets.roas != null) ADS_TARGETS.roas = meta.targets.roas;
@@ -4333,6 +4364,114 @@ function loadAdsYear(brand, year) {
 }
 function ensureAds(brand) {
   loadAdsYear(brand, adsState.ovYear || ADS_THIS_YEAR);
+  loadEmailYear(brand, adsState.ovYear || ADS_THIS_YEAR);
+}
+
+/* ====================================================================
+   EMAIL  (phase 4: Dotdigital + Klaviyo)
+   One /api/email call per brand per calendar year fills DOTD[brand]. The card
+   sits on the Ads tab alongside the three ad platforms, so it loads on the same
+   trigger — but on its own endpoint, because api/ads.js already spends 50 of its
+   60 seconds on Meta.
+
+   Roll-ups are a CONCATENATION, not a sum: every send is already one row, so
+   SGALL/MYALL/GROUP simply pool their members' rows and let the panel bucket
+   them. Money is converted for GROUP exactly as the ad roll-ups do — and a
+   member that reports no revenue nulls it for the whole roll-up rather than
+   letting three tracked brands stand in for four.
+   ==================================================================== */
+var LIVE_EMAIL = {}; // brand -> last /api/email payload
+
+function rebuildEmailAggs() {
+  Object.keys(AGG_MEMBERS).forEach(function (agg) {
+    var isGroup = agg === "GROUP";
+    var rows = [], year = null, anyMember = false, allRevenue = true;
+    AGG_MEMBERS[agg].forEach(function (k) {
+      var D = DOTD[k];
+      if (!D || !D.campaigns) return;
+      anyMember = true;
+      if (year == null) year = D.year;
+      // A member that attributes no revenue cannot be totalled with ones that do:
+      // the sum would read as the whole region's email revenue while silently
+      // covering only part of it.
+      if (D.noRevenue) allRevenue = false;
+      var fx = (isGroup && /MY$/.test(k)) ? FX_MYR_SGD : 1;
+      D.campaigns.forEach(function (c) {
+        rows.push({
+          s: c.s, n: BRANDS[k].name + " · " + c.n,
+          dl: c.dl, op: c.op, cl: c.cl,
+          rv: c.rv == null ? null : c.rv * fx,
+          or: c["or"],
+        });
+      });
+    });
+    if (!anyMember) { delete DOTD[agg]; _claimAdsTab(agg); return; }
+    if (!allRevenue) rows.forEach(function (c) { c.rv = null; c["or"] = null; });
+    rows.sort(function (a, b) { return a.s < b.s ? -1 : a.s > b.s ? 1 : 0; });
+    DOTD[agg] = { campaigns: rows, year: year, noRevenue: !allRevenue, currency: isGroup ? "SGD" : null };
+    _claimAdsTab(agg);
+  });
+}
+
+function applyEmailPayload(brand, payload) {
+  var meta = (payload && payload.meta) || {};
+  var camps = payload && payload.campaigns;
+  LIVE_EMAIL[brand] = payload;
+  if (camps && camps.length) {
+    DOTD[brand] = {
+      campaigns: camps,
+      year: (meta.range && meta.range.year) || null,
+      currency: meta.currency || null,
+      provider: meta.provider || null,
+      noRevenue: !(meta.supports && meta.supports.revenue),
+    };
+  } else {
+    delete DOTD[brand];
+  }
+  // Where no ads payload has set the pickers, the email range is the only window the
+  // tab knows about — otherwise a store on email alone gets a date filter bounded by
+  // nothing it has data for.
+  if (meta.range && meta.range.start && meta.range.end && !ADS_MAXDATE) {
+    ADS_MINDATE = meta.range.start;
+    ADS_MAXDATE = meta.range.end;
+    if (!adsState.start || adsState.start < ADS_MINDATE || adsState.start > ADS_MAXDATE) adsState.start = ADS_MINDATE;
+    if (!adsState.end || adsState.end > ADS_MAXDATE || adsState.end < ADS_MINDATE) adsState.end = ADS_MAXDATE;
+  }
+  _claimAdsTab(brand);
+  rebuildEmailAggs();
+  return !!(camps && camps.length);
+}
+
+// Load one calendar year of email for one store. Cheap and idempotent: a year already
+// loaded (or in flight) is skipped. Mirrors loadAdsYear, including its retry cooldown —
+// renderAds asks for this data, so an un-cooled retry would spin.
+function loadEmailYear(brand, year) {
+  if (AGG_MEMBERS[brand]) {
+    AGG_MEMBERS[brand].forEach(function (k) { loadEmailYear(k, year); });
+    return;
+  }
+  if (!isLiveBrand(brand)) return;
+  var info = liveInfo(brand);
+  if (info.emailLoading) return;
+  if (info.emailYear === year && info.emailSettled) return;
+  if (info.emailYear === year && info.emailFailAt && Date.now() - info.emailFailAt < 30000) return;
+  var end = year === (new Date()).getFullYear() ? TODAY_STR : year + "-12-31";
+  info.emailLoading = true;
+  info.emailYear = year;
+  fetchJSON("/api/email?brand=" + brand + "&start=" + year + "-01-01&end=" + encodeURIComponent(end), 2)
+    .then(function (payload) {
+      info.emailLoading = false;
+      info.emailSettled = true;
+      applyEmailPayload(brand, payload);
+      if (topTabState === "ads") renderAds();
+    })
+    .catch(function () {
+      // A failed email load leaves the card in its honest empty state; it retries the
+      // next time the tab (or that year) is opened, after the cooldown above.
+      info.emailLoading = false;
+      info.emailSettled = false;
+      info.emailFailAt = Date.now();
+    });
 }
 
 /* ====================================================================

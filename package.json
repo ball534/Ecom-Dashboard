@@ -17,6 +17,8 @@
     "meta-warmup": "node scripts/meta-warmup.js",
     "meta-accounts": "node scripts/meta-accounts.js",
     "preview-marketplace": "node scripts/preview-marketplace.js",
+    "preview-email": "node scripts/preview-email.js",
+    "email-discover": "node scripts/email-discover.js",
     "test": "node scripts/test.js",
     "probe-datasets": "node scripts/probe-datasets.js",
     "probe-columns": "node scripts/probe-columns.js"

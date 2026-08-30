@@ -43,6 +43,19 @@ import {
   PRODUCT_TYPE_LIMIT,
 } from "../lib/insights.js";
 import { TARGETS, validateTargets, getTargets } from "../lib/targets.js";
+import {
+  parseMoney,
+  currencyFromMoney,
+  revenueSupported,
+  buildEmailSends,
+} from "../lib/email.js";
+import {
+  fetchDotdigitalEmail,
+  clearDotdigitalAccountCache,
+  isSharedAccount,
+} from "../lib/email-dotdigital.js";
+import { fetchKlaviyoEmail, isSharedKlaviyoAccount } from "../lib/email-klaviyo.js";
+import emailHandler from "../api/email.js";
 import { getConfig, envNames, resolveConfig } from "../api/_shopify.js";
 import { clearTokenCache, getAppCredentials } from "../api/_token.js";
 import { createHmac } from "node:crypto";
@@ -1497,6 +1510,443 @@ test("metaAccountMap reads act_id -> brand out of the env, catching a double-wir
   );
   assert.deepEqual(map.get("act_333").map((w) => w.market), ["SG"]);
   assert.deepEqual(brands.SANSMY, { ids: [], envName: "META_AD_ACCOUNT_SANSMY" });
+});
+
+
+// ---- email: Dotdigital + Klaviyo (lib/email*.js, api/email.js) ----
+
+test("parseMoney reads a platform's formatted revenue in either locale grouping", () => {
+  assert.equal(parseMoney("1,234.56"), 1234.56);   // en grouping
+  assert.equal(parseMoney("RM1.234,56"), 1234.56); // de grouping
+  assert.equal(parseMoney("S$980.00"), 980);
+  assert.equal(parseMoney("1,234"), 1234);         // no decimals at all
+  assert.equal(parseMoney("-45.50"), -45.5);
+  assert.equal(parseMoney("0.00"), 0);
+  assert.equal(parseMoney(12.5), 12.5);
+  // Absent is absent: an unparseable figure must not become a zero.
+  assert.equal(parseMoney(""), null);
+  assert.equal(parseMoney("n/a"), null);
+  assert.equal(parseMoney(null), null);
+});
+
+test("currencyFromMoney names a currency only where the string names one", () => {
+  assert.equal(currencyFromMoney("SGD 12.00"), "SGD");
+  assert.equal(currencyFromMoney("RM1.234,56"), "MYR");
+  assert.equal(currencyFromMoney("S$980"), "SGD");
+  // A bare $ is SGD in one account and USD in another - guessing would mislabel.
+  assert.equal(currencyFromMoney("$5.00"), null);
+});
+
+test("revenueSupported is judged across the window, so one dud send is still a real zero", () => {
+  // An account with commerce tracking off reports 0/0 for EVERY send.
+  assert.equal(revenueSupported([{ revenue: 0, orders: 0 }, { revenue: 0, orders: 0 }]), false);
+  // One campaign that sold nothing next to one that sold is a genuine zero.
+  assert.equal(revenueSupported([{ revenue: 0, orders: 0 }, { revenue: 5, orders: 1 }]), true);
+  // Orders without revenue still counts as attributing.
+  assert.equal(revenueSupported([{ revenue: 0, orders: 2 }]), true);
+  assert.equal(revenueSupported([]), false);
+});
+
+test("buildEmailSends: unattributed revenue is null for the whole window, never 0", () => {
+  const sends = [
+    { date: "2026-02-05", id: 2, name: "CNY", delivered: 2000, opened: 800, clicked: 40, revenue: 0, orders: 0 },
+    { date: "2026-01-05", id: 1, name: "NY", delivered: 1000, opened: 300, clicked: 30, revenue: 0, orders: 0 },
+  ];
+  const rows = buildEmailSends(sends, { year: 2026, supports: { revenue: false } });
+  assert.deepEqual(rows.map((r) => r.s), ["2026-01-05", "2026-02-05"]); // chronological
+  assert.deepEqual(rows.map((r) => r.rv), [null, null]);
+  assert.deepEqual(rows.map((r) => r.or), [null, null]);
+  // Engagement is still real and must survive untouched.
+  assert.deepEqual(rows.map((r) => r.dl), [1000, 2000]);
+  assert.deepEqual(rows.map((r) => r.cl), [30, 40]);
+});
+
+test("buildEmailSends filters to the year, names an untitled send, and nulls an empty year", () => {
+  const sends = [
+    { date: "2025-12-31", id: 9, name: "Last year", delivered: 5, opened: 1, clicked: 0, revenue: 1, orders: 1 },
+    { date: "2026-06-01", id: 7, name: "", delivered: 10, opened: 4, clicked: 2, revenue: 20, orders: 2 },
+  ];
+  const rows = buildEmailSends(sends, { year: 2026, supports: { revenue: true } });
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].n, "Campaign 7");
+  assert.equal(rows[0].rv, 20);
+  // No send in the year is an honest null, distinct from a failure.
+  assert.equal(buildEmailSends(sends, { year: 2024, supports: { revenue: true } }), null);
+});
+
+test("email clients report an unconfigured brand as not-configured, naming the variables", async () => {
+  await assert.rejects(
+    () => fetchDotdigitalEmail({}, "TRTSG", { start: "2026-01-01", end: "2026-12-31" }),
+    (e) => {
+      assert.equal(e.reason, "not-configured");
+      assert.match(e.message, /DOTDIGITAL_USER_TRTSG/);
+      assert.match(e.message, /DOTDIGITAL_PASS_TRTSG/);
+      return true;
+    },
+  );
+  await assert.rejects(
+    () => fetchKlaviyoEmail({}, "MONOSG", { start: "2026-01-01", end: "2026-12-31" }),
+    (e) => {
+      assert.equal(e.reason, "not-configured");
+      assert.match(e.message, /KLAVIYO_API_KEY_MONOSG/);
+      return true;
+    },
+  );
+});
+
+test("a shared Dotdigital account refuses a store that has no filter of its own", async () => {
+  // Six brands live in ONE account. A brand with no filter would be served every
+  // brand's sends and the roll-ups would total the same campaign repeatedly, so this
+  // must be a refusal, not a best-effort answer.
+  const env = {
+    DOTDIGITAL_USER: "shared@apiconnector.com",
+    DOTDIGITAL_PASS: "pw",
+    DOTDIGITAL_FROM_IORASG: "hello@iora.com.sg", // declares the account shared
+  };
+  await assert.rejects(
+    () => fetchDotdigitalEmail(env, "TRTSG", { start: "2026-01-01", end: "2026-12-31" }),
+    (e) => {
+      assert.equal(e.reason, "not-configured");
+      assert.match(e.message, /DOTDIGITAL_FROM_TRTSG/);
+      assert.match(e.message, /DOTDIGITAL_ADDRESS_BOOKS_TRTSG/);
+      return true;
+    },
+  );
+  // With no filter set anywhere the account is a single brand's, and serving all of it
+  // is correct — the guard must not fire.
+  assert.equal(isSharedAccount({ DOTDIGITAL_USER: "u", DOTDIGITAL_PASS: "p" }), false);
+  assert.equal(isSharedAccount(env), true);
+  // A blank filter variable is not a declaration.
+  assert.equal(isSharedAccount({ DOTDIGITAL_FROM_TRTSG: "  " }), false);
+});
+
+test("a shared Klaviyo account refuses a store that has no audience filter", async () => {
+  const env = { KLAVIYO_API_KEY: "pk_x", KLAVIYO_LIST_MONOSG: "Y6nRLr" };
+  await assert.rejects(
+    () => fetchKlaviyoEmail(env, "MONOMY", { start: "2026-01-01", end: "2026-12-31" }),
+    (e) => {
+      assert.equal(e.reason, "not-configured");
+      assert.match(e.message, /KLAVIYO_LIST_MONOMY/);
+      return true;
+    },
+  );
+  assert.equal(isSharedKlaviyoAccount({ KLAVIYO_API_KEY: "pk_x" }), false);
+  assert.equal(isSharedKlaviyoAccount(env), true);
+});
+
+test("Dotdigital splits one shared account by from-address, before spending a summary call", async () => {
+  clearDotdigitalAccountCache();
+  const real = globalThis.fetch;
+  const accountId = `test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const summaryCalls = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    const body = (j) => ({ ok: true, status: 200, text: async () => JSON.stringify(j) });
+    if (u.includes("/v2/account-info")) return body({ id: accountId, properties: [] });
+    if (u.includes("/with-activity-since/")) {
+      return body([
+        { id: 201, name: "IORA RED PACKET", status: "Sent", fromAddress: { id: 1, email: "Hello@iora.com.sg" } },
+        { id: 202, name: "SANS DROP", status: "Sent", fromAddress: { id: 2, email: "hello@sansandsans.com" } },
+        { id: 203, name: "TRT RESTOCK", status: "Sent", fromAddress: { id: 3, email: "hello@trt.com.sg" } },
+      ]);
+    }
+    const m = /\/campaigns\/(\d+)\/summary/.exec(u);
+    if (m) {
+      summaryCalls.push(m[1]);
+      return body({
+        dateSent: "2026-03-02T00:00:00Z",
+        numTotalDelivered: 100, numTotalUniqueOpens: 40,
+        numTotalClicks: 99, numRecipientsClicked: 9,
+        revenue: "S$50.00", numOrders: 2,
+      });
+    }
+    throw new Error(`unexpected fetch: ${u}`);
+  };
+  try {
+    const out = await fetchDotdigitalEmail(
+      {
+        DOTDIGITAL_USER: "shared@apiconnector.com",
+        DOTDIGITAL_PASS: "pw",
+        DOTDIGITAL_REGION: "r3",
+        DOTDIGITAL_FROM_IORASG: "hello@iora.com.sg",
+        DOTDIGITAL_FROM_SANSSG: "hello@sansandsans.com",
+      },
+      "SG",
+      { start: "2026-01-01", end: "2026-12-31" },
+    );
+    assert.equal(out.sends.length, 1);
+    assert.equal(out.sends[0].name, "IORA RED PACKET");
+    // The other two brands' campaigns never cost a call — the address was already in
+    // the list, which is the whole reason from-address is the preferred split.
+    assert.deepEqual(summaryCalls, ["201"]);
+    assert.equal(out.stats.campaigns, 3);
+    assert.equal(out.stats.matched, 1);
+    // Matching is case-insensitive: the campaign said "Hello@", the env said "hello@".
+    assert.equal(out.account.filter, "from");
+    // Two stores on one account must not look like one account to the mapping check.
+    assert.ok(out.account.id.includes("#from:hello@iora.com.sg"));
+  } finally {
+    globalThis.fetch = real;
+    clearDotdigitalAccountCache();
+  }
+});
+
+test("Dotdigital splits a shared account by address book where two stores share a sender", async () => {
+  clearDotdigitalAccountCache();
+  const real = globalThis.fetch;
+  const accountId = `test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const bookCalls = [], summaryCalls = [];
+  const BOOKS = { 301: [{ id: 11 }], 302: [{ id: 22 }], 303: [{ id: 11 }, { id: 99 }] };
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    const body = (j) => ({ ok: true, status: 200, text: async () => JSON.stringify(j) });
+    if (u.includes("/v2/account-info")) return body({ id: accountId, properties: [] });
+    if (u.includes("/with-activity-since/")) {
+      // Both markets send from the same address, so from-address cannot split them.
+      return body([301, 302, 303].map((id) => ({
+        id, name: `C${id}`, status: "Sent", fromAddress: { id: 1, email: "hello@iora.com.sg" },
+      })));
+    }
+    const b = /\/campaigns\/(\d+)\/address-books/.exec(u);
+    if (b) { bookCalls.push(b[1]); return body(BOOKS[b[1]]); }
+    const m = /\/campaigns\/(\d+)\/summary/.exec(u);
+    if (m) {
+      summaryCalls.push(m[1]);
+      return body({
+        dateSent: "2026-04-04T00:00:00Z",
+        numTotalDelivered: 10, numTotalUniqueOpens: 4,
+        numTotalClicks: 9, numRecipientsClicked: 1,
+        revenue: "RM20,00", numOrders: 1,
+      });
+    }
+    throw new Error(`unexpected fetch: ${u}`);
+  };
+  try {
+    const out = await fetchDotdigitalEmail(
+      {
+        DOTDIGITAL_USER: "shared@apiconnector.com",
+        DOTDIGITAL_PASS: "pw",
+        DOTDIGITAL_REGION: "r3",
+        DOTDIGITAL_ADDRESS_BOOKS_IORAMY: "11",
+      },
+      "MY",
+      { start: "2026-01-01", end: "2026-12-31" },
+    );
+    // Every campaign in the account had to be looked up — you cannot know one is not
+    // yours without asking — but only the two matching books cost a summary.
+    assert.deepEqual(bookCalls.sort(), ["301", "302", "303"]);
+    assert.deepEqual(summaryCalls.sort(), ["301", "303"]);
+    assert.equal(out.sends.length, 2);
+    assert.equal(out.stats.matched, 2);
+    assert.equal(out.account.filter, "books");
+    assert.equal(out.currency, "MYR");
+    assert.equal(out.sends[0].revenue, 20);
+  } finally {
+    globalThis.fetch = real;
+    clearDotdigitalAccountCache();
+  }
+});
+
+test("Dotdigital client maps a campaign summary into provider rows (stubbed HTTP)", async () => {
+  clearDotdigitalAccountCache();
+  const real = globalThis.fetch;
+  // A fresh account id per run keeps the on-disk summary cache from leaking between runs.
+  const accountId = `test-${Date.now()}-${Math.floor(Math.random() * 1e6)}`;
+  const seen = [];
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    seen.push(u);
+    const body = (j) => ({ ok: true, status: 200, text: async () => JSON.stringify(j) });
+    if (u.includes("/v2/account-info")) {
+      return body({ id: accountId, properties: [{ name: "ApiEndpoint", value: "https://r3-api.dotdigital.com" }] });
+    }
+    if (u.includes("/with-activity-since/")) {
+      // A short page terminates paging.
+      return body([
+        { id: 101, name: "1.1 SUPER SAVINGS", status: "Sent" },
+        { id: 102, name: "Draft one", status: "Unsent" },
+      ]);
+    }
+    if (u.includes("/campaigns/101/summary")) {
+      return body({
+        dateSent: "2026-01-01T09:30:00Z",
+        numTotalDelivered: 66132,
+        numTotalUniqueOpens: 20697,
+        numTotalClicks: 900,          // total clicks - must NOT be used
+        numRecipientsClicked: 402,    // unique clickers - the panel's denominator pair
+        revenue: "S$961.90",
+        numOrders: 11,
+      });
+    }
+    throw new Error(`unexpected fetch: ${u}`);
+  };
+  try {
+    const out = await fetchDotdigitalEmail(
+      { DOTDIGITAL_USER_IORASG: "u", DOTDIGITAL_PASS_IORASG: "p", DOTDIGITAL_REGION: "r3" },
+      "SG",
+      { start: "2026-01-01", end: "2026-12-31" },
+    );
+    assert.equal(out.sends.length, 1, "an Unsent campaign is not a send");
+    const s = out.sends[0];
+    assert.equal(s.date, "2026-01-01");
+    assert.equal(s.name, "1.1 SUPER SAVINGS");
+    assert.equal(s.delivered, 66132);
+    assert.equal(s.opened, 20697);
+    // Unique clickers, so click-to-open stays a ratio of people to people.
+    assert.equal(s.clicked, 402);
+    assert.equal(s.revenue, 961.9);
+    assert.equal(s.orders, 11);
+    assert.equal(out.currency, "SGD");
+    assert.equal(out.account.id, `dotdigital:${accountId}`);
+    // The configured region is honoured, not rediscovered against r1.
+    assert.ok(seen.every((u) => u.includes("r3-api.dotdigital.com")), "every call went to r3");
+  } finally {
+    globalThis.fetch = real;
+    clearDotdigitalAccountCache();
+  }
+});
+
+test("Klaviyo client groups by message as the API demands, and sums back per campaign", async () => {
+  const real = globalThis.fetch;
+  let reportBody = null;
+  globalThis.fetch = async (url, init) => {
+    const u = String(url);
+    const body = (j) => ({ ok: true, status: 200, text: async () => JSON.stringify(j) });
+    if (u.includes("/api/accounts")) {
+      return body({ data: [{ id: "ACC1", attributes: { preferred_currency: "SGD" } }] });
+    }
+    if (u.includes("/api/metrics")) {
+      return body({ data: [{ id: "MET1", attributes: { name: "Placed Order" } }] });
+    }
+    if (u.includes("/api/campaigns")) {
+      return body({
+        data: [
+          { id: "C1", attributes: { name: "Fall Drop", send_time: "2026-08-26T09:00:00Z" } },
+          // Never sent: no send_time, so no date we could honestly bucket it into.
+          { id: "C2", attributes: { name: "Draft", send_time: null } },
+        ],
+      });
+    }
+    if (u.includes("/api/campaign-values-reports")) {
+      reportBody = JSON.parse(init.body);
+      return body({
+        data: {
+          attributes: {
+            results: [
+              // One campaign, two message rows (an A/B test) — one send to the reader.
+              { groupings: { campaign_id: "C1", campaign_message_id: "M1" },
+                statistics: { delivered: 100, opens_unique: 40, clicks_unique: 8, conversions: 2, conversion_value: 50.5 } },
+              { groupings: { campaign_id: "C1", campaign_message_id: "M2" },
+                statistics: { delivered: 50, opens_unique: 20, clicks_unique: 4, conversions: 1, conversion_value: 25.25 } },
+              // A row whose campaign never sent: undatable, so dropped and counted.
+              { groupings: { campaign_id: "C9", campaign_message_id: "M9" },
+                statistics: { delivered: 7, opens_unique: 1, clicks_unique: 0, conversions: 0, conversion_value: 0 } },
+            ],
+          },
+        },
+      });
+    }
+    throw new Error(`unexpected fetch: ${u}`);
+  };
+  try {
+    const out = await fetchKlaviyoEmail(
+      { KLAVIYO_API_KEY_MONOSG: "pk_test" },
+      "MONOSG",
+      { start: "2026-01-01", end: "2026-12-31" },
+    );
+    // The API rejects the report outright without campaign_message_id.
+    assert.deepEqual(
+      reportBody.data.attributes.group_by,
+      ["campaign_id", "campaign_message_id"],
+      "campaign_message_id is required alongside campaign_id",
+    );
+    assert.equal(out.sends.length, 1, "two message rows are one campaign, not two sends");
+    const s = out.sends[0];
+    assert.equal(s.name, "Fall Drop");
+    assert.equal(s.date, "2026-08-26");
+    assert.equal(s.delivered, 150);
+    assert.equal(s.opened, 60);
+    assert.equal(s.clicked, 12);
+    assert.equal(s.orders, 3);
+    assert.equal(s.revenue, 75.75);
+    assert.equal(out.currency, "SGD");
+    assert.ok(
+      out.notes.some((n) => /1 reported campaign had no send time/.test(n)),
+      "the dropped undatable row is disclosed, not silently missing",
+    );
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("Klaviyo dates a send in the account's timezone, not UTC", async () => {
+  const real = globalThis.fetch;
+  const run = async ({ timezone, sendTime }) => {
+    globalThis.fetch = async (url, init) => {
+      const u = String(url);
+      const body = (j) => ({ ok: true, status: 200, text: async () => JSON.stringify(j) });
+      if (u.includes("/api/accounts")) {
+        return body({ data: [{ id: "ACC1", attributes: { preferred_currency: "SGD", timezone } }] });
+      }
+      if (u.includes("/api/metrics")) return body({ data: [{ id: "MET1", attributes: { name: "Placed Order" } }] });
+      if (u.includes("/api/campaigns")) {
+        return body({ data: [{ id: "C1", attributes: { name: "NYE greeting", send_time: sendTime } }] });
+      }
+      if (u.includes("/api/campaign-values-reports")) {
+        return body({ data: { attributes: { results: [
+          { groupings: { campaign_id: "C1", campaign_message_id: "M1" },
+            statistics: { delivered: 10, opens_unique: 5, clicks_unique: 1, conversions: 0, conversion_value: 0 } },
+        ] } } });
+      }
+      throw new Error(`unexpected fetch: ${u}`);
+    };
+    return fetchKlaviyoEmail({ KLAVIYO_API_KEY_MONOSG: "pk_test" }, "MONOSG", {
+      start: "2024-01-01",
+      end: "2025-12-31",
+    });
+  };
+  try {
+    // 2024-12-31T19:00Z is 2025-01-01 in Singapore. Slicing the UTC string puts this
+    // send in the wrong YEAR, and buildEmailSends filters on exactly that.
+    const sg = await run({ timezone: "Asia/Singapore", sendTime: "2024-12-31T19:00:00+00:00" });
+    assert.equal(sg.sends[0].date, "2025-01-01", "dated in the account's timezone");
+
+    // Without accounts:read there is no timezone, so the UTC slice stands rather than
+    // the pull failing — one day out beats no data.
+    const bare = await run({ timezone: null, sendTime: "2024-12-31T19:00:00+00:00" });
+    assert.equal(bare.sends[0].date, "2024-12-31", "falls back to UTC, does not throw");
+
+    // A nonsense zone must not lose the send either.
+    const bad = await run({ timezone: "Not/AZone", sendTime: "2024-12-31T19:00:00+00:00" });
+    assert.equal(bad.sends[0].date, "2024-12-31", "unrecognised zone falls back");
+  } finally {
+    globalThis.fetch = real;
+  }
+});
+
+test("api/email routes MONOLOQ to Klaviyo and every other store to Dotdigital", async () => {
+  const run = async (brand) => {
+    const res = {
+      headers: {},
+      setHeader(k, v) { this.headers[k] = v; },
+      status(c) { this.code = c; return this; },
+      json(b) { this.body = b; return this; },
+    };
+    await emailHandler({ query: { brand, start: "2026-01-01", end: "2026-12-31" } }, res);
+    return res;
+  };
+  for (const b of ["SG", "MY", "TRTSG", "TRTMY", "SANSSG", "SANSMY"]) {
+    assert.equal((await run(b)).body.meta.provider, "dotdigital", b);
+  }
+  for (const b of ["MONOSG", "MONOMY"]) {
+    assert.equal((await run(b)).body.meta.provider, "klaviyo", b);
+  }
+  // Unconfigured is a 200 with an honest blank, never an error status.
+  const r = await run("SG");
+  assert.equal(r.code, 200);
+  assert.equal(r.body.campaigns, null);
+  assert.equal(r.body.meta.reason, "not-configured");
+  assert.equal(r.body.meta.live, false);
 });
 
 

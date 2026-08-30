@@ -4,6 +4,7 @@
     "api/dashboard.js": { "maxDuration": 60 },
     "api/insights.js": { "maxDuration": 30 },
     "api/ads.js": { "maxDuration": 60 },
+    "api/email.js": { "maxDuration": 60 },
     "api/marketplace.js": { "maxDuration": 60 }
   },
   "rewrites": [
